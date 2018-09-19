@@ -13,7 +13,7 @@
 
 
 from datetime import datetime
-from opcua import Client
+from opcua import Client, ua, uamethod, Server
 import pytz
 import requests
 import time
@@ -22,10 +22,22 @@ import sys
 sys.path.insert(0, "..")
 
 
+################# GLOBAL VARIABLES #################
+
+url_opcua_adapter = "192.168.48.81:1337"
+url_panda_server = "opc.tcp://192.168.48.41:4840/freeopcua/server/"
+url_pixtend_server = "opc.tcp://192.168.48.42:4840/freeopcua/server/"
+url_fhs_server = "opc.tcp://192.168.10.138:4840"
+url_pseudo_fhs_server = "opc.tcp://192.168.48.44:4840/freeopcua/server/"
+
 desired_distance = 0.55  # distance in meters to drive the belt
 belt_velocity = 0.05428  # velocity of the belt in m/s (5.5cm/s)
 timebuffer = 3           # time buffer for the wait loops after method call. wifi istn that fast
 storage = []             # our storage data as an array
+
+
+##################### METHODS ######################
+
 
 def move_belt(obj, direction, desired_distance):
     obj.call_method("2:MoveBelt", direction, desired_distance)  # drive 55cm right
@@ -47,121 +59,128 @@ def move_robot(obj, movement, place):
         time.sleep(0.1)
 
 
+################ DATACHANGE HANDLER ################
+
+class SubHandler(object):
+
+    """
+    Subscription Handler. To receive events from server for a subscription
+    data_change and event methods are called directly from receiving thread.
+    Do not do expensive, slow or network operation there. Create another
+    thread if you need to do such a thing
+    """
+
+    def datachange_notification(self, node, val, data):
+        print("Python: New data change event", node, val, data)
+        print("Sending changed states to kafka stack...")
+        tm = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
+        r1 = requests.post(url_opcua_adapter, data={'id': 'pandapc.panda_state', 'timestamp': tm, 'panda_state': panda_state})
+        r2 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_state', 'timestamp': tm, 'conbelt_state': conbelt_state})
+        r3 = requests.post(url_opcua_adapter, data={'id': 'pandapc.conbelt_dist', 'timestamp': tm, 'conbelt_dist': conbelt_dist})
+
+
+        # data = NewValueAvailable
+        if data == "true" && :
+            # METHOD CALLS
+            # panda_finished = object_panda.call_method("MoveRobot", "SO", desired_storage)
+            # while not panda_finished:
+            #     time.sleep(0.3)
+            #
+            # pixtend_finished = object_pixtend.call_method("2:MoveBelt", "left", 0.6)
+            # while not pixtend_finished:
+            #     time.sleep(0.3)
+
+
+    def event_notification(self, event):
+        print("Python: New event", event)
 
 
 
-
+################################################# START #######################################################
 
 if __name__ == "__main__":
 
-    class SubHandler(object):
+    ################ CLIENT SETUP I ################
 
-        """
-        Subscription Handler. To receive events from server for a subscription
-        data_change and event methods are called directly from receiving thread.
-        Do not do expensive, slow or network operation there. Create another
-        thread if you need to do such a thing
-        """
-
-        def datachange_notification(self, node, val, data):
-            if data == "true":
-                print("Python: New data change event", node, val, data)
-                # METHOD CALLS
-                # panda_finished = object_panda.call_method("MoveRobot", "SO", desired_storage)
-                # while not panda_finished:
-                #     time.sleep(0.3)
-                #
-                # pixtend_finished = object_pixtend.call_method("2:MoveBelt", "left", 0.6)
-                # while not pixtend_finished:
-                #     time.sleep(0.3)
-
-
-        def event_notification(self, event):
-            print("Python: New event", event)
-
-
-    url_opcua_adapter = "192.168.48.81:1337"
-    client_panda = Client("opc.tcp://192.168.48.41:4840/freeopcua/server/")
-    client_pixtend = Client("opc.tcp://192.168.48.42:4840/freeopcua/server/")
-    #client_fhs = Client("opc.tcp://192.168.10.138:4840")
-    client_fhs = Client("opc.tcp://192.168.48.44:4840/freeopcua/server/")
+    client_panda = Client(url_panda_server)
+    client_pixtend = Client(url_pixtend_server)
+    client_fhs = Client(url_pseudo_fhs_server)
     # client = Client("opc.tcp://admin@localhost:4840/freeopcua/server/") #connect using a user
-
-    # get storage data from file
-    # [1][2][3]
-    # [4][5][6]
-    # [7][8][9]
-    with open("./dtz_storage", "r", encoding="utf-8") as inputfile:
-        for line in inputfile:
-            storage.append(line)
 
 
     try:
+        ############# LOAD STORAGE DATA  #############
+
+        # [1][2][3]
+        # [4][5][6]
+        # [7][8][9]
+
+        with open("./dtz_storage", "r", encoding="utf-8") as inputfile:
+            for line in inputfile:
+                storage.append(line)
+
+
+        ################ SERVER SETUP ################
+
+        # setup server
+        server = Server()
+        url = "opc.tcp://0.0.0.0:4840/freeopcua/server"
+        server.set_endpoint(url)
+        # setup namespace
+        uri = "https://github.com/iot-salzburg/dtz_master_controller"
+        idx = server.register_namespace(uri)
+
+        # get Objects node, this is where we should put our nodes
+        objects = server.get_objects_node()
+
+        # Add a parameter object to the address space
+        master_object = objects.add_object(idx, "DTZMasterController")
+
+
+
+        # Parameters - Addresspsace, Name, Initial Value
+        server_time = master_object.add_variable(idx, "ServerTime", 0)
+        mover = master_object.add_method(idx, "MoveDemonstrator", move_demonstrator, [ua.VariantType.String, ua.VariantType.String], [ua.VariantType.Boolean])
+
+        # Start the server
+        server.start()
+
+        print("OPC-UA - Master - Server started at {}".format(url))
+
+        ###############  CLIENT SETUP II ###############
+
+        # connect to servers
         client_panda.connect()
         client_pixtend.connect()
         client_fhs.connect()
 
-        # Client has a few methods to get proxy to UA nodes that should always be in address space such as Root or Objects
+        # Get root nodes
         root_panda = client_panda.get_root_node()
         root_pixtend = client_pixtend.get_root_node()
         root_fhs = client_fhs.get_root_node()
 
-        # get a specific node knowing its node id
-        # var = client.get_node(ua.NodeId(1002, 2))
-        # var = client.get_node("ns=3;i=2002")
-        # print(var)
-        # var.get_data_value() # get value of node as a DataValue object
-        # var.get_value() # get value of node as a python builtin
-        # var.set_value(ua.Variant([23], ua.VariantType.Int64)) #set node value using explicit data type
-        # var.set_value(3.9) # set node value using implicit data type
 
+        ################ GET VARIABLES FROM SERVER ################
 
-        # Now getting a variable node using its browse path
-
-
-        # object_fhs = root_fhs.get_child("0:Objects", "4:PLC", "6:Modules", "6:::","6:Global PV","6:FunctionalPlcKuka")
+        # get our desired objects
         object_fhs = root_fhs.get_child(["0:Objects", "2:PLC"])
         object_panda = root_panda.get_child(["0:Objects", "2:PandaRobot"])
         object_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt"])
 
+        # get the move methods for conveyorbelt and panda robot
         mover_panda = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:MoveRobot"])
         mover_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:MoveBelt"])
 
-        # desired_storage = object_fhs.get_child("6:ShelfNumber")
-        # new_val_available = root_fhs.get_child("6:NewValueAvailable")
-        # task_running = root_fhs.get_child("6:TaskRunning")
-
+        # get the control values from fh salzburg server
         desired_shelf = object_fhs.get_child(["2:ShelfNumber"])
         new_val_available = object_fhs.get_child(["2:NewValueAvailable"])
         task_running = object_fhs.get_child(["2:TaskRunning"])
 
-        #handler = SubHandler()
-        #sub = client_fhs.create_subscription(500, handler)
-        #handle = sub.subscribe_data_change(new_val_available)
-        #time.sleep(0.1)
-
-        #while True:
-        print("running")
-        # VALUES
-        panda_state = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotState"])
-        # panda_temp_value = root_panda.get_child(["0:Objects", "2:Object1", "2:RobotTempValue"])
-        conbelt_state = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltState"])
-        conbelt_dist = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltDist"])
-
-
-        tm = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
-        #r1 = requests.post(url_opcua_adapter, data={'id': 'pandapc.panda_state', 'timestamp': tm, 'panda_state': panda_state})
-        #r2 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_state', 'timestamp': tm, 'conbelt_state': conbelt_state})
-        #r3 = requests.post(url_opcua_adapter, data={'id': 'pandapc.conbelt_dist', 'timestamp': tm, 'conbelt_dist': conbelt_dist})
-
-        time.sleep(0.3)
-
-
-        # STORAGE OUTPUT
+        ################ STORAGE OUTPUT ################
 
         print("---------------------------")
-        local_shelf = desired_shelf.get_value()
-        print("Desired shelf is " + str(local_shelf))
+        local_shelf = desired_shelf.get_value()-1   # Shelf 1-9 to array 0-8
+        print("Desired shelf on FHS Server is " + str(local_shelf+1))   # print shelf 1-9
 
         print("---------------------------")
         print("Storage containing " + str(len(storage)) + " fields")
@@ -169,20 +188,39 @@ if __name__ == "__main__":
         while i < len(storage):
             print("[" + str(i+1) + "]: " + str(storage[i]), end="")
             i = i + 1
-
         print("\n---------------------------")
 
 
-        # STORAGE CHECK
-
-        if (storage[local_shelf-1] == 1):
-            print("Desired shelf is not empty")
+        if str(int(storage[local_shelf])) == "1":   # Shelf 0-8
+            print("Desired shelf [" + str(local_shelf+1) + "] is not empty")
 
         else:
-            print("Desired shelf is empty")
+            print("Desired shelf [" + str(local_shelf+1) + "] is empty")
+        print("---------------------------")
 
-        print(local_shelf)
-        print(storage[local_shelf-1])
+        ###### SUBSCRIBE TO SERVER DATA CHANGES #######
+
+        handler = SubHandler()
+        sub = client_fhs.create_subscription(500, handler)
+        handle = sub.subscribe_data_change(new_val_available)
+        time.sleep(0.1)
+
+
+        ############### RUNNNING LOOP ###############
+
+        while True:
+            print("running")
+            # VALUES
+            panda_state = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotState"])
+            panda_moving = root_panda.get_child(["0:Objects", "2:Object1", "2:RobotRunning"])
+            conbelt_state = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltState"])
+            conbelt_dist = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltDist"])
+
+            # Send data to FH Salzburg Server when panda robot is moving
+            if panda_moving or conbelt_moving:
+                task_running.set_value(True)
+
+            time.sleep(0.3)
 
 
 
@@ -195,12 +233,13 @@ if __name__ == "__main__":
         print("\nClient stopped")
         client_pixtend.disconnect()
         client_panda.disconnect()
+        client_fhs.disconnect()
 
-        # write storage data to file
+        ############# SAVE STORAGE DATA  #############
+
         # [1][2][3]
         # [4][5][6]
         # [7][8][9]
-        print("lel")
 
         with open("./dtz_storage", "w", encoding="utf-8") as outputfile:
             for i in storage:
