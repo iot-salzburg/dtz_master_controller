@@ -14,8 +14,9 @@
 
 from datetime import datetime
 from opcua import Client, ua, uamethod, Server
-import pytz
+import threading, queue
 import requests
+import pytz
 import time
 import sys
 
@@ -34,29 +35,46 @@ desired_distance = 0.55  # distance in meters to drive the belt
 belt_velocity = 0.05428  # velocity of the belt in m/s (5.5cm/s)
 timebuffer = 3           # time buffer for the wait loops after method call. wifi istn that fast
 storage = []             # our storage data as an array
+global_new_val_available = False
+global_demonstrator_busy = None
+global_belt_moving = None
+global_panda_obj = None
+global_pixtend_obj = None
 
 
 ##################### METHODS ######################
 
-
-def move_belt(obj, direction, desired_distance):
-    obj.call_method("2:MoveBelt", direction, desired_distance)  # drive 55cm right
-    print("called move_belt to " + str(direction) + " for " + str(desired_distance) + "m")
-    print("sleeping...")
-    for i in range(0, (int(desired_distance / belt_velocity) * 10) + timebuffer):
-        time.sleep(0.1)
+def start_demo_core(shelf, available, cbelt_moving, panda_obj, pixtend_obj, demo_busy):
 
 
-def move_robot(obj, movement, place):
-    obj.call_method("MoveRobot", movement, place)  # movement = PO,SO or PS # place = 1-9
-    if movement == "PO":
-        print("called move_robot from Printer to Output")
-    elif movement == "SO":
-        print("called move_robot from Storage #" + place + " to Output")
-    elif movement == "PS":
-        print("called move_robot from Printer to Storage #" + place)
-    for i in range(0, (int(desired_distance / belt_velocity) * 10) + timebuffer):
-        time.sleep(0.1)
+    if available == True and cbelt_moving == False:
+
+        demo_busy = True
+        # Methods
+        pixtend_obj.call_method("2:MoveBelt", "left", 0.55)  # drive 55cm right
+        panda_obj.call_method("2:MoveRobot", "SO", str(desired_shelf))
+
+        # hier einfügen, prüfen auf variablen von panda ferttig und belt fertig
+
+        conbelt.move_right_for(distance)
+    elif direction == "left":
+        conbelt.move_left_for(distance)
+    return True
+
+@uamethod
+def start_demo(parent, shelf):
+    print("Move Demo")
+    move_thread = threading.Thread(name='move_demo_thread', target = start_demo_core, args = (shelf,
+                                                                                              global_new_val_available,
+                                                                                              global_belt_moving,
+                                                                                              global_panda_obj,
+                                                                                              global_pixtend_obj,
+                                                                                              global_demonstrator_busy,))
+    move_thread.daemon = True
+    move_thread.start()
+    return True
+
+
 
 
 ################ DATACHANGE HANDLER ################
@@ -70,25 +88,27 @@ class SubHandler(object):
     thread if you need to do such a thing
     """
 
+    def __init__(self, shelf_fh_server_object, panda_moving_pandapc_object, belt_moving_pixtend_object, panda_object, pixtend_object):
+        self.shelf_nr = shelf_fh_server_object.getvalue()
+        self.panda_is_moving = panda_moving_pandapc_object.getvalue()
+        self.belt_is_moving = belt_moving_pixtend_object.getvalue()
+        self.panda_obj = panda_object
+        self.belt_obj = pixtend_object
+
+
     def datachange_notification(self, node, val, data):
         print("Python: New data change event", node, val, data)
-        print("Sending changed states to kafka stack...")
-        tm = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
-        r1 = requests.post(url_opcua_adapter, data={'id': 'pandapc.panda_state', 'timestamp': tm, 'panda_state': panda_state})
-        r2 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_state', 'timestamp': tm, 'conbelt_state': conbelt_state})
-        r3 = requests.post(url_opcua_adapter, data={'id': 'pandapc.conbelt_dist', 'timestamp': tm, 'conbelt_dist': conbelt_dist})
-
 
         # data = NewValueAvailable
-        if data == "true" && :
+        if data == "true" :
             # METHOD CALLS
-            # panda_finished = object_panda.call_method("MoveRobot", "SO", desired_storage)
-            # while not panda_finished:
-            #     time.sleep(0.3)
-            #
-            # pixtend_finished = object_pixtend.call_method("2:MoveBelt", "left", 0.6)
-            # while not pixtend_finished:
-            #     time.sleep(0.3)
+            self.panda_obj.call_method("MoveRobot", "SO", self.shelf_nr)
+            while self.panda_is_moving:
+                time.sleep(0.1)
+
+            self.belt_obj.call_method("2:MoveBelt", "left", 0.6)
+            while self.belt_is_moving:
+                time.sleep(0.1)
 
 
     def event_notification(self, event):
@@ -136,10 +156,9 @@ if __name__ == "__main__":
         # Add a parameter object to the address space
         master_object = objects.add_object(idx, "DTZMasterController")
 
-
-
         # Parameters - Addresspsace, Name, Initial Value
         server_time = master_object.add_variable(idx, "ServerTime", 0)
+        global_demonstrator_busy = demonstrator_busy = master_object.add_variable(idx, "DemonstratorBusy", False)
         mover = master_object.add_method(idx, "MoveDemonstrator", move_demonstrator, [ua.VariantType.String, ua.VariantType.String], [ua.VariantType.Boolean])
 
         # Start the server
@@ -167,14 +186,23 @@ if __name__ == "__main__":
         object_panda = root_panda.get_child(["0:Objects", "2:PandaRobot"])
         object_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt"])
 
-        # get the move methods for conveyorbelt and panda robot
+        # VALUES
         mover_panda = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:MoveRobot"])
+        panda_state = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotState"])
+
+        panda_moving = root_panda.get_child(["0:Objects", "2:Object1", "2:RobotMoving"])
+
         mover_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:MoveBelt"])
+        conbelt_state = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltState"])
+        conbelt_dist = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltDist"])
+
+        belt_moving = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
 
         # get the control values from fh salzburg server
         desired_shelf = object_fhs.get_child(["2:ShelfNumber"])
         new_val_available = object_fhs.get_child(["2:NewValueAvailable"])
         task_running = object_fhs.get_child(["2:TaskRunning"])
+
 
         ################ STORAGE OUTPUT ################
 
@@ -190,7 +218,6 @@ if __name__ == "__main__":
             i = i + 1
         print("\n---------------------------")
 
-
         if str(int(storage[local_shelf])) == "1":   # Shelf 0-8
             print("Desired shelf [" + str(local_shelf+1) + "] is not empty")
 
@@ -198,30 +225,37 @@ if __name__ == "__main__":
             print("Desired shelf [" + str(local_shelf+1) + "] is empty")
         print("---------------------------")
 
+
         ###### SUBSCRIBE TO SERVER DATA CHANGES #######
 
-        handler = SubHandler()
+        handler = SubHandler(local_shelf+1, panda_moving, belt_moving, object_panda, object_pixtend)
         sub = client_fhs.create_subscription(500, handler)
         handle = sub.subscribe_data_change(new_val_available)
         time.sleep(0.1)
 
 
-        ############### RUNNNING LOOP ###############
+        ########################### RUNNNING LOOP ##############################
+        print("Starting and running...")
+        task_running.set_value(True)
 
         while True:
-            print("running")
-            # VALUES
-            panda_state = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotState"])
-            panda_moving = root_panda.get_child(["0:Objects", "2:Object1", "2:RobotRunning"])
-            conbelt_state = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltState"])
-            conbelt_dist = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltDist"])
 
             # Send data to FH Salzburg Server when panda robot is moving
-            if panda_moving or conbelt_moving:
+            if demonstrator_busy:
+                print("Demonstrator is busy")
                 task_running.set_value(True)
+            elif not demonstrator_busy:
+                print("Demonstrator is not busy")
+                task_running.set_value(False)
+
+
+            # Sending changed states to kafka stack
+            tm = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
+            r1 = requests.post(url_opcua_adapter,data={'id': 'pandapc.panda_state', 'timestamp': tm, 'panda_state': panda_state})
+            r2 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_state', 'timestamp': tm, 'conbelt_state': conbelt_state})
+            r3 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_dist', 'timestamp': tm, 'conbelt_dist': conbelt_dist})
 
             time.sleep(0.3)
-
 
 
 
