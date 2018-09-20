@@ -14,7 +14,7 @@
 
 from datetime import datetime
 from opcua import Client, ua, uamethod, Server
-import threading, queue
+import threading
 import requests
 import pytz
 import time
@@ -35,41 +35,45 @@ desired_distance = 0.55  # distance in meters to drive the belt
 belt_velocity = 0.05428  # velocity of the belt in m/s (5.5cm/s)
 timebuffer = 3           # time buffer for the wait loops after method call. wifi istn that fast
 storage = []             # our storage data as an array
-global_new_val_available = False
-global_demonstrator_busy = None
-global_belt_moving = None
-global_panda_obj = None
-global_pixtend_obj = None
+global global_new_val_available
+global global_demonstrator_busy
+global global_belt_moving
+global global_panda_moving
+global global_panda_obj
+global global_pixtend_obj
+global global_desired_shelf
+
+
 
 
 ##################### METHODS ######################
 
-def start_demo_core(shelf, available, cbelt_moving, panda_obj, pixtend_obj, demo_busy):
+def start_demo_core(movement, shelf):
 
+    if global_new_val_available == True and global_demonstrator_busy == False:
 
-    if available == True and cbelt_moving == False:
+        global_demonstrator_busy = True
 
-        demo_busy = True
         # Methods
-        pixtend_obj.call_method("2:MoveBelt", "left", 0.55)  # drive 55cm right
-        panda_obj.call_method("2:MoveRobot", "SO", str(desired_shelf))
+        global_panda_obj.call_method("2:MoveRobot", movement, str(global_desired_shelf.get_value()))
 
-        # hier einfügen, prüfen auf variablen von panda ferttig und belt fertig
+        while global_panda_moving:
+            time.sleep(0.2)
 
-        conbelt.move_right_for(distance)
-    elif direction == "left":
-        conbelt.move_left_for(distance)
-    return True
+        global_pixtend_obj.call_method("2:MoveBelt", "left", 0.55)  # drive 55cm right
+
+        while global_belt_moving.get_value():
+            time.sleep(0.2)
+
+        demo_busy = False
+        return True
+    else:
+        return False
 
 @uamethod
-def start_demo(parent, shelf):
+def start_demo(parent, movement, shelf):
     print("Move Demo")
-    move_thread = threading.Thread(name='move_demo_thread', target = start_demo_core, args = (shelf,
-                                                                                              global_new_val_available,
-                                                                                              global_belt_moving,
-                                                                                              global_panda_obj,
-                                                                                              global_pixtend_obj,
-                                                                                              global_demonstrator_busy,))
+    move_thread = threading.Thread(name='move_demo_thread', target = start_demo_core, args = (movement, shelf, ))
     move_thread.daemon = True
     move_thread.start()
     return True
@@ -88,27 +92,71 @@ class SubHandler(object):
     thread if you need to do such a thing
     """
 
-    def __init__(self, shelf_fh_server_object, panda_moving_pandapc_object, belt_moving_pixtend_object, panda_object, pixtend_object):
-        self.shelf_nr = shelf_fh_server_object.getvalue()
-        self.panda_is_moving = panda_moving_pandapc_object.getvalue()
-        self.belt_is_moving = belt_moving_pixtend_object.getvalue()
+    def __init__(self, shelf_nr, panda_moving, belt_moving, panda_object, pixtend_object):
+        self.shelf_nr = shelf_nr
+        self.panda_is_moving = panda_moving
+        self.belt_is_moving = belt_moving
         self.panda_obj = panda_object
         self.belt_obj = pixtend_object
 
 
+    def move_robot_core(self, movement, shelf_nr):
+        self.panda_obj.call_method("2:MoveRobot", movement, str(shelf_nr))
+
+        time.sleep(3)
+        while global_panda_moving.get_value():
+            print("while global panda moving")
+            time.sleep(0.1)
+
+        return True
+
+
+    def move_belt_core(self, movement, distance):
+
+        self.belt_obj.call_method("2:MoveBelt", movement, distance)
+
+        while global_belt_moving:
+            time.sleep(0.1)
+
+        return True
+
+
     def datachange_notification(self, node, val, data):
-        print("Python: New data change event", node, val, data)
+        print("Python: New data change event on fhs server: NewValAvailable=", val)
+
 
         # data = NewValueAvailable
-        if data == "true" :
-            # METHOD CALLS
-            self.panda_obj.call_method("MoveRobot", "SO", self.shelf_nr)
-            while self.panda_is_moving:
-                time.sleep(0.1)
+        if val == True:
+            print("global_demonstrator_busy:" + str(val))
 
-            self.belt_obj.call_method("2:MoveBelt", "left", 0.6)
-            while self.belt_is_moving:
-                time.sleep(0.1)
+            client_fhs2 = Client(url_pseudo_fhs_server)
+            client_fhs2.connect()
+            root_fhs2 = client_fhs2.get_root_node()
+            object_fhs2 = root_fhs2.get_child(["0:Objects", "2:PLC"])
+            desired_shelf2 = object_fhs2.get_child(["2:ShelfNumber"])
+
+
+
+            # METHOD CALLS
+            #global_task_running = True
+
+            move_panda_thread = threading.Thread(name='move_panda_thread', target=self.move_robot_core, args=("SO", desired_shelf2.get_value(), ))
+            move_panda_thread.daemon = True
+            move_panda_thread.start()
+            move_panda_thread.join()
+
+            move_belt_thread = threading.Thread(name='move_belt_thread', target=self.move_belt_core, args=("left", 0.55,))
+            move_belt_thread.daemon = True
+            move_belt_thread.start()
+
+            client_fhs2.disconnect()
+            #global_task_running = False
+
+
+
+
+
+
 
 
     def event_notification(self, event):
@@ -158,8 +206,8 @@ if __name__ == "__main__":
 
         # Parameters - Addresspsace, Name, Initial Value
         server_time = master_object.add_variable(idx, "ServerTime", 0)
-        global_demonstrator_busy = demonstrator_busy = master_object.add_variable(idx, "DemonstratorBusy", False)
-        mover = master_object.add_method(idx, "MoveDemonstrator", move_demonstrator, [ua.VariantType.String, ua.VariantType.String], [ua.VariantType.Boolean])
+        global_demonstrator_busy = master_object.add_variable(idx, "DemonstratorBusy", False)
+        mover = master_object.add_method(idx, "MoveDemonstrator", start_demo, [ua.VariantType.String, ua.VariantType.Int64], [ua.VariantType.Boolean])
 
         # Start the server
         server.start()
@@ -189,25 +237,25 @@ if __name__ == "__main__":
         # VALUES
         mover_panda = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:MoveRobot"])
         panda_state = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotState"])
-
-        panda_moving = root_panda.get_child(["0:Objects", "2:Object1", "2:RobotMoving"])
+        global_panda_moving = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotMoving"])
 
         mover_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:MoveBelt"])
         conbelt_state = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltState"])
         conbelt_dist = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltDist"])
 
-        belt_moving = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
+        global_belt_moving = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
 
         # get the control values from fh salzburg server
-        desired_shelf = object_fhs.get_child(["2:ShelfNumber"])
-        new_val_available = object_fhs.get_child(["2:NewValueAvailable"])
+        global_desired_shelf = object_fhs.get_child(["2:ShelfNumber"])
+        global_new_val_available = object_fhs.get_child(["2:NewValueAvailable"])
         task_running = object_fhs.get_child(["2:TaskRunning"])
-
+        desired_shelf = object_fhs.get_child(["2:ShelfNumber"])
 
         ################ STORAGE OUTPUT ################
 
         print("---------------------------")
-        local_shelf = desired_shelf.get_value()-1   # Shelf 1-9 to array 0-8
+        print("shelfie " + str(desired_shelf.get_value()))
+        local_shelf = global_desired_shelf.get_value()-1   # Shelf 1-9 to array 0-8
         print("Desired shelf on FHS Server is " + str(local_shelf+1))   # print shelf 1-9
 
         print("---------------------------")
@@ -228,34 +276,46 @@ if __name__ == "__main__":
 
         ###### SUBSCRIBE TO SERVER DATA CHANGES #######
 
-        handler = SubHandler(local_shelf+1, panda_moving, belt_moving, object_panda, object_pixtend)
-        sub = client_fhs.create_subscription(500, handler)
-        handle = sub.subscribe_data_change(new_val_available)
+        demo_handler = SubHandler(str(local_shelf+1), global_panda_moving.get_value(), global_belt_moving.get_value(), object_panda, object_pixtend)
+        sub = client_fhs.create_subscription(500, demo_handler)
+        demo_handle = sub.subscribe_data_change(global_new_val_available)
         time.sleep(0.1)
+
+
+        # datahandler
+
+        # Sending changed states to kafka stack
+        tm = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
+        # r1 = requests.post(url_opcua_adapter,data={'id': 'pandapc.panda_state', 'timestamp': tm, 'panda_state': panda_state})
+        # r2 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_state', 'timestamp': tm, 'conbelt_state': conbelt_state})
+        # r3 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_dist', 'timestamp': tm, 'conbelt_dist': conbelt_dist})
 
 
         ########################### RUNNNING LOOP ##############################
         print("Starting and running...")
         task_running.set_value(True)
+        global_demonstrator_busy.set_value(True)
 
         while True:
 
-            # Send data to FH Salzburg Server when panda robot is moving
-            if demonstrator_busy:
-                print("Demonstrator is busy")
+            if global_panda_moving.get_value():
+                #print("panda is moving - task running is true")
                 task_running.set_value(True)
-            elif not demonstrator_busy:
-                print("Demonstrator is not busy")
+
+            while not global_belt_moving.get_value():
+                #print("while belt is not moving between panda and belt")
+                time.sleep(0.1)
+
+            while global_belt_moving.get_value():
+                #print("while belt is moving" + str(global_belt_moving.get_value()))
+                time.sleep(0.1)
+
+            if not global_belt_moving.get_value():
+                #print("belt stopped - task running is false")
                 task_running.set_value(False)
 
 
-            # Sending changed states to kafka stack
-            tm = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
-            r1 = requests.post(url_opcua_adapter,data={'id': 'pandapc.panda_state', 'timestamp': tm, 'panda_state': panda_state})
-            r2 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_state', 'timestamp': tm, 'conbelt_state': conbelt_state})
-            r3 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_dist', 'timestamp': tm, 'conbelt_dist': conbelt_dist})
-
-            time.sleep(0.3)
+            time.sleep(0.1)
 
 
 
