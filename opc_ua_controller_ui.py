@@ -33,52 +33,52 @@ url_pseudo_fhs_server = "opc.tcp://192.168.48.44:4840/freeopcua/server/"
 
 desired_distance = 0.55  # distance in meters to drive the belt
 belt_velocity = 0.05428  # velocity of the belt in m/s (5.5cm/s)
-timebuffer = 3           # time buffer for the wait loops after method call. wifi istn that fast
 storage = []             # our storage data as an array
-global global_new_val_available
-global global_demonstrator_busy
-global global_belt_moving
-global global_panda_moving
-global global_panda_obj
-global global_pixtend_obj
-global global_desired_shelf
-
-
+global_new_val_available = None
+global_demonstrator_busy = None
+global_belt_moving = None
+global_panda_moving = None
+global_object_panda = None
+global_object_pixtend = None
+global_desired_shelf = None
 
 
 ##################### METHODS ######################
 
-def start_demo_core(movement, shelf):
+def start_demo_core(movement):
 
-    if global_new_val_available == True and global_demonstrator_busy == False:
-
-        global_demonstrator_busy = True
-
-        # Methods
-        global_panda_obj.call_method("2:MoveRobot", movement, str(global_desired_shelf.get_value()))
+        global_object_panda.call_method("2:MoveRobot", movement, str(global_desired_shelf.get_value()))
 
         while global_panda_moving:
             time.sleep(0.2)
-
-        global_pixtend_obj.call_method("2:MoveBelt", "left", 0.55)  # drive 55cm right
+            global_object_pixtend.call_method("2:MoveBelt", "left", 0.55)  # drive 55cm right
 
         while global_belt_moving.get_value():
             time.sleep(0.2)
 
-        demo_busy = False
         return True
-    else:
-        return False
+
 
 @uamethod
 def start_demo(parent, movement, shelf):
-    print("Move Demo")
-    move_thread = threading.Thread(name='move_demo_thread', target = start_demo_core, args = (movement, shelf, ))
-    move_thread.daemon = True
-    move_thread.start()
-    return True
 
+    global storage
 
+    if storage[shelf] is "0":
+        return "Shelf empty - error!"
+
+    elif global_demonstrator_busy.get_value() is False:
+
+        global_demonstrator_busy.set_value(True)
+        move_thread = threading.Thread(name='move_demo_thread', target=start_demo_core, args=(movement, ))
+        move_thread.daemon = True
+        move_thread.start()
+        storage[shelf] = "0"    # make shelf empty
+        return "Demonstrator is busy - error!"
+
+    else:
+
+        return "Shelf not empty - Demonstrator started!"
 
 
 ################ DATACHANGE HANDLER ################
@@ -98,9 +98,12 @@ class SubHandler(object):
         self.belt_is_moving = belt_moving
         self.panda_obj = panda_object
         self.belt_obj = pixtend_object
+        self.storage = []
+
 
 
     def move_robot_core(self, movement, shelf_nr):
+
         self.panda_obj.call_method("2:MoveRobot", movement, str(shelf_nr))
 
         time.sleep(3)
@@ -126,37 +129,50 @@ class SubHandler(object):
 
 
         # data = NewValueAvailable
-        if val == True:
+        if val is True and global_demonstrator_busy is False:
             print("global_demonstrator_busy:" + str(val))
 
-            client_fhs2 = Client(url_pseudo_fhs_server)
-            client_fhs2.connect()
-            root_fhs2 = client_fhs2.get_root_node()
-            object_fhs2 = root_fhs2.get_child(["0:Objects", "2:PLC"])
-            desired_shelf2 = object_fhs2.get_child(["2:ShelfNumber"])
+            ############# LOAD STORAGE DATA  #############
+            # [1][2][3]
+            # [4][5][6]
+            # [7][8][9]
+            with open("./dtz_storage", "r", encoding="utf-8") as in_file:
+                for in_line in in_file:
+                    self.storage.append(in_line)
 
+            # GET SOME VALUES FROM FHS SERVER
+            handler_client_fhs = Client(url_pseudo_fhs_server)
+            handler_client_fhs.connect()
+            handler_root_fhs = handler_client_fhs.get_root_node()
+            handler_object_fhs = handler_root_fhs.get_child(["0:Objects", "2:PLC"])
+            handler_desired_shelf = handler_object_fhs.get_child(["2:ShelfNumber"])
 
+            # IS THE STORAGE EMPTY?
+            if self.storage[handler_desired_shelf.get_value()-1] is "0":
+                return "Shelf empty - error!"
+            else:
+                # METHOD CALLS
+                move_panda_thread = threading.Thread(name='move_panda_thread', target=self.move_robot_core, args=("SO", handler_desired_shelf.get_value(),))
+                move_panda_thread.daemon = True
+                move_panda_thread.start()
+                move_panda_thread.join()
 
-            # METHOD CALLS
-            #global_task_running = True
+                move_belt_thread = threading.Thread(name='move_belt_thread', target=self.move_belt_core, args=("left", 0.55,))
+                move_belt_thread.daemon = True
+                move_belt_thread.start()
+                self.storage[handler_desired_shelf.get_value()-1] = "0"
 
-            move_panda_thread = threading.Thread(name='move_panda_thread', target=self.move_robot_core, args=("SO", desired_shelf2.get_value(), ))
-            move_panda_thread.daemon = True
-            move_panda_thread.start()
-            move_panda_thread.join()
+                handler_client_fhs.disconnect()
 
-            move_belt_thread = threading.Thread(name='move_belt_thread', target=self.move_belt_core, args=("left", 0.55,))
-            move_belt_thread.daemon = True
-            move_belt_thread.start()
+                ############# SAVE STORAGE DATA  #############
+                # [1][2][3]
+                # [4][5][6]
+                # [7][8][9]
+                with open("./dtz_storage", "w", encoding="utf-8") as out_file:
+                    for out_line in self.storage:
+                        out_file.write(str(out_line))
 
-            client_fhs2.disconnect()
-            #global_task_running = False
-
-
-
-
-
-
+                return "Shelf not empty - successful!"
 
 
     def event_notification(self, event):
@@ -178,13 +194,11 @@ if __name__ == "__main__":
 
     try:
         ############# LOAD STORAGE DATA  #############
-
         # [1][2][3]
         # [4][5][6]
         # [7][8][9]
-
-        with open("./dtz_storage", "r", encoding="utf-8") as inputfile:
-            for line in inputfile:
+        with open("./dtz_storage", "r", encoding="utf-8") as input_file:
+            for line in input_file:
                 storage.append(line)
 
 
@@ -214,6 +228,7 @@ if __name__ == "__main__":
 
         print("OPC-UA - Master - Server started at {}".format(url))
 
+
         ###############  CLIENT SETUP II ###############
 
         # connect to servers
@@ -231,8 +246,8 @@ if __name__ == "__main__":
 
         # get our desired objects
         object_fhs = root_fhs.get_child(["0:Objects", "2:PLC"])
-        object_panda = root_panda.get_child(["0:Objects", "2:PandaRobot"])
-        object_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt"])
+        global_object_panda = root_panda.get_child(["0:Objects", "2:PandaRobot"])
+        global_object_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt"])
 
         # VALUES
         mover_panda = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:MoveRobot"])
@@ -251,6 +266,7 @@ if __name__ == "__main__":
         task_running = object_fhs.get_child(["2:TaskRunning"])
         desired_shelf = object_fhs.get_child(["2:ShelfNumber"])
 
+
         ################ STORAGE OUTPUT ################
 
         print("---------------------------")
@@ -268,7 +284,6 @@ if __name__ == "__main__":
 
         if str(int(storage[local_shelf])) == "1":   # Shelf 0-8
             print("Desired shelf [" + str(local_shelf+1) + "] is not empty")
-
         else:
             print("Desired shelf [" + str(local_shelf+1) + "] is empty")
         print("---------------------------")
@@ -276,13 +291,11 @@ if __name__ == "__main__":
 
         ###### SUBSCRIBE TO SERVER DATA CHANGES #######
 
-        demo_handler = SubHandler(str(local_shelf+1), global_panda_moving.get_value(), global_belt_moving.get_value(), object_panda, object_pixtend)
+        demo_handler = SubHandler(str(local_shelf+1), global_panda_moving.get_value(), global_belt_moving.get_value(),global_object_panda, global_object_pixtend)
         sub = client_fhs.create_subscription(500, demo_handler)
         demo_handle = sub.subscribe_data_change(global_new_val_available)
         time.sleep(0.1)
 
-
-        # datahandler
 
         # Sending changed states to kafka stack
         tm = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
@@ -298,24 +311,12 @@ if __name__ == "__main__":
 
         while True:
 
-            if global_panda_moving.get_value():
-                #print("panda is moving - task running is true")
+            if global_panda_moving.get_value() or global_belt_moving.get_value():
                 task_running.set_value(True)
-
-            while not global_belt_moving.get_value():
-                #print("while belt is not moving between panda and belt")
-                time.sleep(0.1)
-
-            while global_belt_moving.get_value():
-                #print("while belt is moving" + str(global_belt_moving.get_value()))
-                time.sleep(0.1)
-
-            if not global_belt_moving.get_value():
-                #print("belt stopped - task running is false")
+            else:
                 task_running.set_value(False)
 
-
-            time.sleep(0.1)
+            time.sleep(0.4)
 
 
 
@@ -335,6 +336,6 @@ if __name__ == "__main__":
         # [4][5][6]
         # [7][8][9]
 
-        with open("./dtz_storage", "w", encoding="utf-8") as outputfile:
-            for i in storage:
-                outputfile.write(str(i))
+        with open("./dtz_storage", "w", encoding="utf-8") as output_file:
+            for line in storage:
+                output_file.write(str(line))
