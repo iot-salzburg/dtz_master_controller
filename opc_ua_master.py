@@ -105,7 +105,10 @@ class SubHandler(object):
         self.belt_obj = pixtend_object
         self.storage = []
         self.handler_panda_moving = None
+        self.handler_belt_moving = None
         self.handler_demonstrator_busy = None
+        self.panda_moved = False
+        self.belt_moved = False
 
 
 
@@ -114,26 +117,44 @@ class SubHandler(object):
         #self.panda_obj.call_method("2:MoveRobotLibfranka", movement, str(shelf_nr))
         self.panda_obj.call_method("2:MoveRobotRos", movement, str(shelf_nr))
         time.sleep(3)
-
-
+        self.panda_moved = False
+        print("robot core")
+        mytime = 0
         while not self.handler_panda_moving.get_value():
             time.sleep(0.1)
+            mytime += 0.1
+            print("time: ", mytime)
+            # panda does not react
+            if mytime >= 3:
+                self.panda_moved = False
+                return False
+
+        print("out")
 
         print("panda moving: " + str(self.handler_panda_moving.get_value()))
         while self.handler_panda_moving.get_value():
             time.sleep(0.1)
         print("panda move finished")
-
+        self.panda_moved = True
         return True
 
 
     def move_belt_core(self, movement, distance):
 
         self.belt_obj.call_method("2:MoveBelt", movement, distance)
+        self.belt_moved = False
 
-        while global_belt_moving.get_value():
+        mytime = 0
+        while not self.handler_belt_moving.get_value():
             time.sleep(0.1)
+            mytime += 0.1
+            print("time: ", mytime)
+            # panda does not react
+            if mytime >= 3:
+                self.belt_moved = False
+                return False
 
+        self.belt_moved = True
         return True
 
 
@@ -159,6 +180,12 @@ class SubHandler(object):
         handler_root_panda = handler_client_panda.get_root_node()
         self.handler_panda_moving = handler_root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotMoving"])
 
+        # GET VALUES FROM PIXTEND SERVER
+        handler_client_pixtend = Client(url_pixtend_server)
+        handler_client_pixtend.connect()
+        handler_root_pixtend = handler_client_pixtend.get_root_node()
+        self.handler_belt_moving = handler_root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
+
 
         # data = NewValueAvailable
         if val is True and self.demonstrator_busy.get_value() is False :
@@ -180,6 +207,7 @@ class SubHandler(object):
             else:
                 self.demonstrator_busy.set_value(True)
 
+
                 # METHOD CALLS
                 move_panda_thread = threading.Thread(name='move_panda_thread', target=self.move_robot_core, args=("SO", handler_desired_shelf.get_value(), ))
                 move_panda_thread.daemon = True
@@ -188,10 +216,19 @@ class SubHandler(object):
 
                # move_panda_thread.wait()
 
-                move_belt_thread = threading.Thread(name='move_belt_thread', target=self.move_belt_core, args=("left", 0.55,))
-                move_belt_thread.daemon = True
-                move_belt_thread.start()
-                self.storage[handler_desired_shelf.get_value()-1] = "0"
+                print("p_moved ", self.panda_moved)
+                if self.panda_moved is True:
+                    move_belt_thread = threading.Thread(name='move_belt_thread', target=self.move_belt_core, args=("left", 0.55,))
+                    move_belt_thread.daemon = True
+                    move_belt_thread.start()
+                    self.storage[handler_desired_shelf.get_value()-1] = "0"
+                    move_belt_thread.join()
+                    if not self.belt_moved:
+                        print("Error - Belt not moved")
+                        return "Error - Belt not moved"
+                else:
+                    print("Error - Panda not moved")
+                    return "Error - Panda not moved"
 
                 handler_client_fhs.disconnect()
                 handler_client_panda.disconnect()
