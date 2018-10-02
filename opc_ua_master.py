@@ -28,8 +28,9 @@ sys.path.insert(0, "..")
 url_opcua_adapter = "192.168.48.81:1337"
 url_panda_server = "opc.tcp://192.168.48.41:4840/freeopcua/server/"
 url_pixtend_server = "opc.tcp://192.168.48.42:4840/freeopcua/server/"
-url_fhs_server = "opc.tcp://192.168.10.138:4840"
+url_fhs_server = "opc.tcp://192.168.10.102:4840"
 url_pseudo_fhs_server = "opc.tcp://192.168.48.44:4840/freeopcua/server/"
+
 
 desired_distance = 0.55  # distance in meters to drive the belt
 belt_velocity = 0.05428  # velocity of the belt in m/s (5.5cm/s)
@@ -47,11 +48,14 @@ global_desired_shelf = None
 
 def start_demo_core(movement):
 
-        global_object_panda.call_method("2:MoveRobot", movement, str(global_desired_shelf.get_value()))
+        print("in start demo core")
+        #global_object_panda.call_method("2:MoveRobotLibfranka", movement, str(global_desired_shelf.get_value()))
+        global_object_panda.call_method("2:MoveRobotRos", movement, str(global_desired_shelf.get_value()))
 
-        while global_panda_moving:
+        while global_panda_moving.get_value():
             time.sleep(0.2)
-            global_object_pixtend.call_method("2:MoveBelt", "left", 0.55)  # drive 55cm right
+
+        global_object_pixtend.call_method("2:MoveBelt", "left", 0.55)  # drive 55cm right
 
         while global_belt_moving.get_value():
             time.sleep(0.2)
@@ -63,11 +67,12 @@ def start_demo_core(movement):
 def start_demo(parent, movement, shelf):
 
     global storage
+    global global_demonstrator_busy
 
     if storage[shelf] is "0":
         return "Shelf empty - error!"
 
-    elif global_demonstrator_busy.get_value() is False:
+    elif not global_panda_moving.get_value() and not global_belt_moving.get_value():
 
         global_demonstrator_busy.set_value(True)
         move_thread = threading.Thread(name='move_demo_thread', target=start_demo_core, args=(movement, ))
@@ -99,17 +104,25 @@ class SubHandler(object):
         self.panda_obj = panda_object
         self.belt_obj = pixtend_object
         self.storage = []
+        self.handler_panda_moving = None
+        self.handler_demonstrator_busy = None
 
 
 
     def move_robot_core(self, movement, shelf_nr):
 
-        self.panda_obj.call_method("2:MoveRobot", movement, str(shelf_nr))
-
+        #self.panda_obj.call_method("2:MoveRobotLibfranka", movement, str(shelf_nr))
+        self.panda_obj.call_method("2:MoveRobotRos", movement, str(shelf_nr))
         time.sleep(3)
-        while global_panda_moving.get_value():
-            print("while global panda moving")
+
+
+        while not self.handler_panda_moving.get_value():
             time.sleep(0.1)
+
+        print("panda moving: " + str(self.handler_panda_moving.get_value()))
+        while self.handler_panda_moving.get_value():
+            time.sleep(0.1)
+        print("panda move finished")
 
         return True
 
@@ -118,7 +131,7 @@ class SubHandler(object):
 
         self.belt_obj.call_method("2:MoveBelt", movement, distance)
 
-        while global_belt_moving:
+        while global_belt_moving.get_value():
             time.sleep(0.1)
 
         return True
@@ -127,10 +140,29 @@ class SubHandler(object):
     def datachange_notification(self, node, val, data):
         print("Python: New data change event on fhs server: NewValAvailable=", val)
 
+        # GET SOME VALUES FROM THIS SERVER
+        this_client = Client("opc.tcp://0.0.0.0:4840/freeopcua/server")
+        this_client.connect()
+        this_client_root = this_client.get_root_node()
+        self.demonstrator_busy = this_client_root.get_child( ["0:Objects", "2:DTZMasterController", "2:DemonstratorBusy"])
+
+        # GET SOME VALUES FROM FHS SERVER
+        handler_client_fhs = Client(url_fhs_server)
+        handler_client_fhs.connect()
+        handler_root_fhs = handler_client_fhs.get_root_node()
+        # handler_object_fhs = handler_root_fhs.get_child(["0:Objects", "2:PLC"])
+        handler_desired_shelf = handler_client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")
+
+        # GET VALUES FROM PANDA SERVER
+        handler_client_panda = Client(url_panda_server)
+        handler_client_panda.connect()
+        handler_root_panda = handler_client_panda.get_root_node()
+        self.handler_panda_moving = handler_root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotMoving"])
+
 
         # data = NewValueAvailable
-        if val is True and global_demonstrator_busy is False:
-            print("global_demonstrator_busy:" + str(val))
+        if val is True and self.demonstrator_busy.get_value() is False :
+            print("global_demonstrator_busy: " + str(self.demonstrator_busy.get_value()) + ". NewValAvailable: " + str(val))
 
             ############# LOAD STORAGE DATA  #############
             # [1][2][3]
@@ -140,22 +172,21 @@ class SubHandler(object):
                 for in_line in in_file:
                     self.storage.append(in_line)
 
-            # GET SOME VALUES FROM FHS SERVER
-            handler_client_fhs = Client(url_pseudo_fhs_server)
-            handler_client_fhs.connect()
-            handler_root_fhs = handler_client_fhs.get_root_node()
-            handler_object_fhs = handler_root_fhs.get_child(["0:Objects", "2:PLC"])
-            handler_desired_shelf = handler_object_fhs.get_child(["2:ShelfNumber"])
 
             # IS THE STORAGE EMPTY?
+
             if self.storage[handler_desired_shelf.get_value()-1] is "0":
                 return "Shelf empty - error!"
             else:
+                self.demonstrator_busy.set_value(True)
+
                 # METHOD CALLS
-                move_panda_thread = threading.Thread(name='move_panda_thread', target=self.move_robot_core, args=("SO", handler_desired_shelf.get_value(),))
+                move_panda_thread = threading.Thread(name='move_panda_thread', target=self.move_robot_core, args=("SO", handler_desired_shelf.get_value(), ))
                 move_panda_thread.daemon = True
                 move_panda_thread.start()
                 move_panda_thread.join()
+
+               # move_panda_thread.wait()
 
                 move_belt_thread = threading.Thread(name='move_belt_thread', target=self.move_belt_core, args=("left", 0.55,))
                 move_belt_thread.daemon = True
@@ -163,6 +194,8 @@ class SubHandler(object):
                 self.storage[handler_desired_shelf.get_value()-1] = "0"
 
                 handler_client_fhs.disconnect()
+                handler_client_panda.disconnect()
+                this_client.disconnect()
 
                 ############# SAVE STORAGE DATA  #############
                 # [1][2][3]
@@ -188,147 +221,173 @@ if __name__ == "__main__":
 
     client_panda = Client(url_panda_server)
     client_pixtend = Client(url_pixtend_server)
-    client_fhs = Client(url_pseudo_fhs_server)
+    client_fhs = Client(url_fhs_server)
     # client = Client("opc.tcp://admin@localhost:4840/freeopcua/server/") #connect using a user
 
 
-    try:
-        ############# LOAD STORAGE DATA  #############
-        # [1][2][3]
-        # [4][5][6]
-        # [7][8][9]
-        with open("./dtz_storage", "r", encoding="utf-8") as input_file:
-            for line in input_file:
-                storage.append(line)
+    ############# LOAD STORAGE DATA  #############
+    # [1][2][3]
+    # [4][5][6]
+    # [7][8][9]
+    with open("./dtz_storage", "r", encoding="utf-8") as input_file:
+        for line in input_file:
+            storage.append(line)
+    # reconnection counter
+    reconnect_counter = 0
+
+    ################ SERVER SETUP ################
+
+    # setup server
+    server = Server()
+    url = "opc.tcp://0.0.0.0:4840/freeopcua/server"
+    server.set_endpoint(url)
+    # setup namespace
+    uri = "urn:freeopcua"
+    idx = server.register_namespace(uri)
+
+    # get Objects node, this is where we should put our nodes
+    objects = server.get_objects_node()
+
+    # Add a parameter object to the address space
+    master_object = objects.add_object(idx, "DTZMasterController")
+
+    # Parameters - Addresspsace, Name, Initial Value
+    server_time = master_object.add_variable(idx, "ServerTime", 0)
+    global_demonstrator_busy = master_object.add_variable(idx, "DemonstratorBusy", False)
+    global_demonstrator_busy.set_writable()
+    mover = master_object.add_method(idx, "MoveDemonstrator", start_demo, [ua.VariantType.String, ua.VariantType.Int64],
+                                     [ua.VariantType.Boolean])
+
+    while True:
+
+        try:
+
+            # Start the server
+            server.start()
+
+            print("OPC-UA - Master - Server started at {}".format(url))
 
 
-        ################ SERVER SETUP ################
+            ###############  CLIENT SETUP II ###############
 
-        # setup server
-        server = Server()
-        url = "opc.tcp://0.0.0.0:4840/freeopcua/server"
-        server.set_endpoint(url)
-        # setup namespace
-        uri = "https://github.com/iot-salzburg/dtz_master_controller"
-        idx = server.register_namespace(uri)
+            # connect to servers
+            client_panda.connect()
+            client_pixtend.connect()
+            client_fhs.connect()
 
-        # get Objects node, this is where we should put our nodes
-        objects = server.get_objects_node()
+            # Get root nodes
+            root_panda = client_panda.get_root_node()
+            root_pixtend = client_pixtend.get_root_node()
+            root_fhs = client_fhs.get_root_node()
 
-        # Add a parameter object to the address space
-        master_object = objects.add_object(idx, "DTZMasterController")
+            # Connection successful?
+            reconnect_counter = 0
 
-        # Parameters - Addresspsace, Name, Initial Value
-        server_time = master_object.add_variable(idx, "ServerTime", 0)
-        global_demonstrator_busy = master_object.add_variable(idx, "DemonstratorBusy", False)
-        mover = master_object.add_method(idx, "MoveDemonstrator", start_demo, [ua.VariantType.String, ua.VariantType.Int64], [ua.VariantType.Boolean])
+            ################ GET VARIABLES FROM SERVER ################
 
-        # Start the server
-        server.start()
+            # get our desired objects
+            #object_fhs = root_fhs.get_child(["0:Objects", "2:PLC"])
+            global_object_panda = root_panda.get_child(["0:Objects", "2:PandaRobot"])
+            global_object_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt"])
 
-        print("OPC-UA - Master - Server started at {}".format(url))
+            # VALUES
+            mover_panda_ros = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:MoveRobotRos"])
+            mover_panda_libfranka = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:MoveRobotLibfranka"])
+            panda_state = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotState"])
+            global_panda_moving = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotMoving"])
 
+            mover_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:MoveBelt"])
+            conbelt_state = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltState"])
+            conbelt_dist = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltDist"])
 
-        ###############  CLIENT SETUP II ###############
+            global_belt_moving = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
 
-        # connect to servers
-        client_panda.connect()
-        client_pixtend.connect()
-        client_fhs.connect()
+            # get the control values from fh salzburg server
+            global_desired_shelf = client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")
 
-        # Get root nodes
-        root_panda = client_panda.get_root_node()
-        root_pixtend = client_pixtend.get_root_node()
-        root_fhs = client_fhs.get_root_node()
+            #global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:NewValAvailable")             ###### ORIGINAL!!!
+            global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:StartRobot")
 
-
-        ################ GET VARIABLES FROM SERVER ################
-
-        # get our desired objects
-        object_fhs = root_fhs.get_child(["0:Objects", "2:PLC"])
-        global_object_panda = root_panda.get_child(["0:Objects", "2:PandaRobot"])
-        global_object_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt"])
-
-        # VALUES
-        mover_panda = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:MoveRobot"])
-        panda_state = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotState"])
-        global_panda_moving = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotMoving"])
-
-        mover_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:MoveBelt"])
-        conbelt_state = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltState"])
-        conbelt_dist = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltDist"])
-
-        global_belt_moving = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
-
-        # get the control values from fh salzburg server
-        global_desired_shelf = object_fhs.get_child(["2:ShelfNumber"])
-        global_new_val_available = object_fhs.get_child(["2:NewValueAvailable"])
-        task_running = object_fhs.get_child(["2:TaskRunning"])
-        desired_shelf = object_fhs.get_child(["2:ShelfNumber"])
+            task_running = client_fhs.get_node("ns=6;s=::AsGlobalPV:TaskRunning")
 
 
-        ################ STORAGE OUTPUT ################
+            ################ STORAGE OUTPUT ################
 
-        print("---------------------------")
-        print("shelfie " + str(desired_shelf.get_value()))
-        local_shelf = global_desired_shelf.get_value()-1   # Shelf 1-9 to array 0-8
-        print("Desired shelf on FHS Server is " + str(local_shelf+1))   # print shelf 1-9
+            print("---------------------------")
+            print("shelfie " + str(global_desired_shelf.get_value()))
+            local_shelf = global_desired_shelf.get_value()-1   # Shelf 1-9 to array 0-8
+            print("Desired shelf on FHS Server is " + str(local_shelf+1))   # print shelf 1-9
 
-        print("---------------------------")
-        print("Storage containing " + str(len(storage)) + " fields")
-        i = 0
-        while i < len(storage):
-            print("[" + str(i+1) + "]: " + str(storage[i]), end="")
-            i = i + 1
-        print("\n---------------------------")
+            print("---------------------------")
+            print("Storage containing " + str(len(storage)) + " fields")
+            i = 0
+            while i < len(storage):
+                print("[" + str(i+1) + "]: " + str(storage[i]), end="")
+                i = i + 1
+            print("\n---------------------------")
 
-        if str(int(storage[local_shelf])) == "1":   # Shelf 0-8
-            print("Desired shelf [" + str(local_shelf+1) + "] is not empty")
-        else:
-            print("Desired shelf [" + str(local_shelf+1) + "] is empty")
-        print("---------------------------")
-
-
-        ###### SUBSCRIBE TO SERVER DATA CHANGES #######
-
-        demo_handler = SubHandler(str(local_shelf+1), global_panda_moving.get_value(), global_belt_moving.get_value(),global_object_panda, global_object_pixtend)
-        sub = client_fhs.create_subscription(500, demo_handler)
-        demo_handle = sub.subscribe_data_change(global_new_val_available)
-        time.sleep(0.1)
-
-
-        # Sending changed states to kafka stack
-        tm = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
-        # r1 = requests.post(url_opcua_adapter,data={'id': 'pandapc.panda_state', 'timestamp': tm, 'panda_state': panda_state})
-        # r2 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_state', 'timestamp': tm, 'conbelt_state': conbelt_state})
-        # r3 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_dist', 'timestamp': tm, 'conbelt_dist': conbelt_dist})
-
-
-        ########################### RUNNNING LOOP ##############################
-        print("Starting and running...")
-        task_running.set_value(True)
-        global_demonstrator_busy.set_value(True)
-
-        while True:
-
-            if global_panda_moving.get_value() or global_belt_moving.get_value():
-                task_running.set_value(True)
+            if str(int(storage[local_shelf])) == "1":   # Shelf 0-8
+                print("Desired shelf [" + str(local_shelf+1) + "] is not empty")
             else:
-                task_running.set_value(False)
-
-            time.sleep(0.4)
-
+                print("Desired shelf [" + str(local_shelf+1) + "] is empty")
+            print("---------------------------")
 
 
-    except KeyboardInterrupt:
-        print("\nClient stopped...CTRL+C pressed")
-    except requests.exceptions.ConnectionError:
-        print("error connecting...")
-    finally:
-        print("\nClient stopped")
+            ###### SUBSCRIBE TO SERVER DATA CHANGES #######
+
+            demo_handler = SubHandler(str(local_shelf+1), global_panda_moving.get_value(), global_belt_moving.get_value(),global_object_panda, global_object_pixtend)
+            sub = client_fhs.create_subscription(500, demo_handler)
+            demo_handle = sub.subscribe_data_change(global_new_val_available)
+            time.sleep(0.1)
+
+
+            # Sending changed states to kafka stack
+            tm = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
+            # r1 = requests.post(url_opcua_adapter,data={'id': 'pandapc.panda_state', 'timestamp': tm, 'panda_state': panda_state})
+            # r2 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_state', 'timestamp': tm, 'conbelt_state': conbelt_state})
+            # r3 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_dist', 'timestamp': tm, 'conbelt_dist': conbelt_dist})
+
+
+            ########################### RUNNNING LOOP ##############################
+            print("Starting and running...")
+
+            #task_running.set_value(True)
+            global_demonstrator_busy.set_value(True)
+
+            while True:
+                #print("panda moving: " + str(global_panda_moving.get_value()) + ". belt_moving: " + str(global_belt_moving.get_value()))
+
+                #print("global_panda_moving: " + str(global_panda_moving.get_value()) + ". global_belt_moving: " + str(global_belt_moving.get_value()))
+
+                if global_panda_moving.get_value() or global_belt_moving.get_value():
+                    global_demonstrator_busy.set_value(True)
+                else:
+                    global_demonstrator_busy.set_value(False)
+
+                #print("global_demonstrator busy: " + str(global_demonstrator_busy.get_value()))
+
+                time.sleep(0.4)
+
+
+        except KeyboardInterrupt:
+            print("\nCTRL+C pressed")
+            break
+        except requests.exceptions.ConnectionError:
+            print("error connecting...")
+        except Exception as e:
+            # try connecting again
+            time.sleep(2**reconnect_counter)
+            reconnect_counter += 1
+            print("Error while connecting to servers - " + str(e) + " trying again in " + str(2**reconnect_counter) + " seconds.")
+            continue
+        finally:
+            server.stop()
+            print("\nClient stopped")
+
         client_pixtend.disconnect()
         client_panda.disconnect()
         client_fhs.disconnect()
+
 
         ############# SAVE STORAGE DATA  #############
 
