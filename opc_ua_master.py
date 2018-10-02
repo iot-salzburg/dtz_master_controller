@@ -299,8 +299,8 @@ if __name__ == "__main__":
         # get the control values from fh salzburg server
         global_desired_shelf = client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")
 
-        #global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:NewValAvailable")             ###### ORIGINAL!!!
-        global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:StartRobot")
+        global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:NewValAvailable")             ###### ORIGINAL!!!
+        #global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:StartRobot")
 
         task_running = client_fhs.get_node("ns=6;s=::AsGlobalPV:TaskRunning")
 
