@@ -19,6 +19,32 @@ import requests
 import pytz
 import time
 import sys
+import logging
+import traceback
+
+# create logger
+logger = logging.getLogger('dtz_master_controller')
+logger.setLevel(logging.DEBUG)
+
+# create console handler and set level to debug
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+
+# create formatter
+formatter = logging.Formatter('%(asctime)s - %(name)s [%(filename)s:%(lineno)d] - %(levelname)s - %(message)s')
+
+# add formatter to ch
+ch.setFormatter(formatter)
+
+# add ch to logger
+logger.addHandler(ch)
+
+# 'application' code
+logger.debug('test debug message')
+logger.info('test info message')
+logger.warn('test warn message')
+logger.error('test error message')
+logger.critical('test critical message')
 
 sys.path.insert(0, "..")
 
@@ -48,7 +74,7 @@ global_desired_shelf = None
 
 def start_demo_core(movement):
 
-        print("in start demo core")
+        logger.debug("in start demo core")
         #global_object_panda.call_method("2:MoveRobotLibfranka", movement, str(global_desired_shelf.get_value()))
         global_object_panda.call_method("2:MoveRobotRos", movement, str(global_desired_shelf.get_value()))
 
@@ -116,25 +142,26 @@ class SubHandler(object):
 
         #self.panda_obj.call_method("2:MoveRobotLibfranka", movement, str(shelf_nr))
         self.panda_obj.call_method("2:MoveRobotRos", movement, str(shelf_nr))
+        logger.debug("move robot to shelf %s",shelf_nr)
         time.sleep(3)
         self.panda_moved = False
-        print("robot core")
+        logger.debug("robot core")
         mytime = 0
         while not self.handler_panda_moving.get_value():
             time.sleep(0.1)
             mytime += 0.1
-            print("time: ", mytime)
             # panda does not react
-            if mytime >= 3:
+            if mytime >= 6:
+                logger.debug("waited for: %s seconds without detecting panda moving", mytime)
                 self.panda_moved = False
                 return False
 
-        print("out")
+        logger.debug("out")
 
-        print("panda moving: " + str(self.handler_panda_moving.get_value()))
+        logger.debug("panda moving: " + str(self.handler_panda_moving.get_value()))
         while self.handler_panda_moving.get_value():
             time.sleep(0.1)
-        print("panda move finished")
+        logger.debug("panda move finished")
         self.panda_moved = True
         return True
 
@@ -148,7 +175,7 @@ class SubHandler(object):
         while not self.handler_belt_moving.get_value():
             time.sleep(0.1)
             mytime += 0.1
-            print("time: ", mytime)
+            logger.debug("time: %s", mytime)
             # panda does not react
             if mytime >= 3:
                 self.belt_moved = False
@@ -159,15 +186,17 @@ class SubHandler(object):
 
 
     def datachange_notification(self, node, val, data):
-        print("Python: New data change event on fhs server: NewValAvailable=", val)
+        logger.debug("Python: New data change event on fhs server: NewValAvailable=%s", val)
 
         # GET SOME VALUES FROM THIS SERVER
+        logger.debug("connecting to local Server")
         this_client = Client("opc.tcp://0.0.0.0:4840/freeopcua/server")
         this_client.connect()
         this_client_root = this_client.get_root_node()
         self.demonstrator_busy = this_client_root.get_child( ["0:Objects", "2:DTZMasterController", "2:DemonstratorBusy"])
 
         # GET SOME VALUES FROM FHS SERVER
+        logger.debug("connecting to FHS Server")
         handler_client_fhs = Client(url_fhs_server)
         handler_client_fhs.connect()
         handler_root_fhs = handler_client_fhs.get_root_node()
@@ -175,12 +204,14 @@ class SubHandler(object):
         handler_desired_shelf = handler_client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")
 
         # GET VALUES FROM PANDA SERVER
+        logger.debug("connecting to Panda Server")
         handler_client_panda = Client(url_panda_server)
         handler_client_panda.connect()
         handler_root_panda = handler_client_panda.get_root_node()
         self.handler_panda_moving = handler_root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotMoving"])
 
         # GET VALUES FROM PIXTEND SERVER
+        logger.debug("connecting to Pixtend Server")
         handler_client_pixtend = Client(url_pixtend_server)
         handler_client_pixtend.connect()
         handler_root_pixtend = handler_client_pixtend.get_root_node()
@@ -188,8 +219,11 @@ class SubHandler(object):
 
 
         # data = NewValueAvailable
-        if val is True and self.demonstrator_busy.get_value() is False :
-            print("global_demonstrator_busy: " + str(self.demonstrator_busy.get_value()) + ". NewValAvailable: " + str(val))
+        demoBusy = self.demonstrator_busy.get_value()
+        exit = "NewValAvailable is {}, demonstratorBusy is {}".format(val,demoBusy)
+
+        if val is True and demoBusy is False :
+            logger.debug("global_demonstrator_busy: " + str(demoBusy) + ". NewValAvailable: " + str(val))
 
             ############# LOAD STORAGE DATA  #############
             # [1][2][3]
@@ -203,7 +237,7 @@ class SubHandler(object):
             # IS THE STORAGE EMPTY?
 
             if self.storage[handler_desired_shelf.get_value()-1] is "0":
-                return "Shelf empty - error!"
+                exit = "Shelf empty - error!"
             else:
                 self.demonstrator_busy.set_value(True)
 
@@ -216,7 +250,7 @@ class SubHandler(object):
 
                # move_panda_thread.wait()
 
-                print("p_moved ", self.panda_moved)
+                logger.debug("p_moved %s", self.panda_moved)
                 if self.panda_moved is True:
                     move_belt_thread = threading.Thread(name='move_belt_thread', target=self.move_belt_core, args=("left", 0.55,))
                     move_belt_thread.daemon = True
@@ -224,11 +258,11 @@ class SubHandler(object):
                     self.storage[handler_desired_shelf.get_value()-1] = "0"
                     move_belt_thread.join()
                     if not self.belt_moved:
-                        print("Error - Belt not moved")
-                        return "Error - Belt not moved"
+                        logger.debug("Error - Belt not moved")
+                        exit = "Error - Belt not moved"
                 else:
-                    print("Error - Panda not moved")
-                    return "Error - Panda not moved"
+                    logger.debug("Error - Panda not moved")
+                    exit = "Error - Panda not moved"
 
                 handler_client_fhs.disconnect()
                 handler_client_panda.disconnect()
@@ -242,11 +276,14 @@ class SubHandler(object):
                     for out_line in self.storage:
                         out_file.write(str(out_line))
 
-                return "Shelf not empty - successful!"
+                exit = "Shelf not empty - successful!"
+
+        logger.debug("exiting datachange_notification. return message: %s", exit)
+        return exit
 
 
     def event_notification(self, event):
-        print("Python: New event", event)
+        logger.debug("Python: New event", event)
 
 
 
@@ -302,14 +339,17 @@ if __name__ == "__main__":
             # Start the server
             server.start()
 
-            print("OPC-UA - Master - Server started at {}".format(url))
+            logger.debug("OPC-UA - Master - Server started at {}".format(url))
 
 
             ###############  CLIENT SETUP II ###############
 
             # connect to servers
+            logger.debug("connecting to panda server")
             client_panda.connect()
+            logger.debug("connecting to pixtend server")
             client_pixtend.connect()
+            logger.debug("connecting to fhs server")
             client_fhs.connect()
 
             # Get root nodes
@@ -350,24 +390,25 @@ if __name__ == "__main__":
 
             ################ STORAGE OUTPUT ################
 
-            print("---------------------------")
-            print("shelfie " + str(global_desired_shelf.get_value()))
+            logger.debug("---------------------------")
+            logger.debug("shelfie " + str(global_desired_shelf.get_value()))
             local_shelf = global_desired_shelf.get_value()-1   # Shelf 1-9 to array 0-8
-            print("Desired shelf on FHS Server is " + str(local_shelf+1))   # print shelf 1-9
+            logger.debug("Desired shelf on FHS Server is " + str(local_shelf+1))   # print shelf 1-9
 
-            print("---------------------------")
-            print("Storage containing " + str(len(storage)) + " fields")
+            logger.debug("---------------------------")
+            logger.debug("Storage containing " + str(len(storage)) + " fields")
             i = 0
             while i < len(storage):
-                print("[" + str(i+1) + "]: " + str(storage[i]), end="")
+                logger.debug("[" + str(i+1) + "]: " + str(storage[i]))
                 i = i + 1
-            print("\n---------------------------")
+
+            logger.debug("\n---------------------------")
 
             if str(int(storage[local_shelf])) == "1":   # Shelf 0-8
-                print("Desired shelf [" + str(local_shelf+1) + "] is not empty")
+                logger.debug("Desired shelf [" + str(local_shelf+1) + "] is not empty")
             else:
-                print("Desired shelf [" + str(local_shelf+1) + "] is empty")
-            print("---------------------------")
+                logger.debug("Desired shelf [" + str(local_shelf+1) + "] is empty")
+            logger.debug("---------------------------")
 
 
             ###### SUBSCRIBE TO SERVER DATA CHANGES #######
@@ -386,40 +427,41 @@ if __name__ == "__main__":
 
 
             ########################### RUNNNING LOOP ##############################
-            print("Starting and running...")
+            logger.debug("Starting and running...")
 
             #task_running.set_value(True)
             global_demonstrator_busy.set_value(True)
 
             while True:
-                #print("panda moving: " + str(global_panda_moving.get_value()) + ". belt_moving: " + str(global_belt_moving.get_value()))
+                #logger.debug("panda moving: " + str(global_panda_moving.get_value()) + ". belt_moving: " + str(global_belt_moving.get_value()))
 
-                #print("global_panda_moving: " + str(global_panda_moving.get_value()) + ". global_belt_moving: " + str(global_belt_moving.get_value()))
+                #logger.debug("global_panda_moving: " + str(global_panda_moving.get_value()) + ". global_belt_moving: " + str(global_belt_moving.get_value()))
 
                 if global_panda_moving.get_value() or global_belt_moving.get_value():
                     global_demonstrator_busy.set_value(True)
                 else:
                     global_demonstrator_busy.set_value(False)
 
-                #print("global_demonstrator busy: " + str(global_demonstrator_busy.get_value()))
+                #logger.debug("global_demonstrator busy: " + str(global_demonstrator_busy.get_value()))
 
                 time.sleep(0.4)
 
 
         except KeyboardInterrupt:
-            print("\nCTRL+C pressed")
+            logger.debug("\nCTRL+C pressed")
             break
         except requests.exceptions.ConnectionError:
-            print("error connecting...")
+            logger.debug("error connecting...")
         except Exception as e:
             # try connecting again
             time.sleep(2**reconnect_counter)
             reconnect_counter += 1
-            print("Error while connecting to servers - " + str(e) + " trying again in " + str(2**reconnect_counter) + " seconds.")
+            logger.debug("Error while connecting to servers - " + str(e) + " trying again in " + str(2**reconnect_counter) + " seconds.")
+            logger.debug(traceback.format_exc())
             continue
         finally:
             server.stop()
-            print("\nClient stopped")
+            logger.debug("\nClient stopped")
 
         client_pixtend.disconnect()
         client_panda.disconnect()
@@ -435,3 +477,4 @@ if __name__ == "__main__":
         with open("./dtz_storage", "w", encoding="utf-8") as output_file:
             for line in storage:
                 output_file.write(str(line))
+
