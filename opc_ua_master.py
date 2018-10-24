@@ -72,6 +72,7 @@ global_belt_moved = None
 global_panda_moved = None
 
 
+
 ######################################## CALL BY METHOD CALL ON MASTER #################################################
 
 
@@ -135,6 +136,8 @@ def start_demo(parent, movement, shelf):
     global global_belt_moving
     global global_panda_moved
     global global_belt_moved
+    global global_storage
+
     exit = "None"
 
     logger.debug("starting demo by method call")
@@ -151,11 +154,13 @@ def start_demo(parent, movement, shelf):
                 global_storage.append(in_line)
 
         # IS THE STORAGE EMPTY?
-
+        logger.debug("In StartDemo - chosen shelf number is " + str(global_storage[shelf-1]))
 
         if global_storage[shelf-1] is "0":
             exit = "Shelf empty - error!"
+            logger.debug("Shelf empty - error!")
         else:
+            logger.debug("Shelf not empty!")
             global_demonstrator_busy.set_value(True)
 
             # METHOD CALLS
@@ -268,15 +273,16 @@ class SubHandler(object):
         global global_desired_shelf
         global global_panda_moving
         global global_belt_moving
+        global global_storage
 
         logger.debug("Python: New data change event on fhs server: NewValAvailable=%s", val)
 
 
         # data = NewValueAvailable
-        exit = "NewValAvailable is {}, demonstratorBusy is {}".format(val, global_demonstrator_busy)
+        exit = "NewValAvailable is {}, demonstratorBusy is {}".format(val, global_demonstrator_busy.get_value())
 
         if val is True and global_demonstrator_busy.get_value() is False :
-            logger.debug("global_demonstrator_busy: " + str(global_demonstrator_busy) + ". NewValAvailable: " + str(val))
+            logger.debug("global_demonstrator_busy: " + str(global_demonstrator_busy) + ". NewValAvailable: " + str(val) + ". ShelfNumber: " + str(global_desired_shelf.get_value()))
 
             ############# LOAD STORAGE DATA  #############
             # [1][2][3]
@@ -343,8 +349,7 @@ class SubHandler(object):
 
 if __name__ == "__main__":
 
-
-    reconnect_counter = 0
+    reconnect_counter = 1
 
     ################ CLIENT SETUP I ################
 
@@ -402,7 +407,7 @@ if __name__ == "__main__":
             root_fhs = client_fhs.get_root_node()
 
             # Connection successful?
-            reconnect_counter = 0
+            reconnect_counter = 1
 
             ################ GET VARIABLES FROM SERVER ################
 
@@ -430,30 +435,6 @@ if __name__ == "__main__":
             #global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:StartRobot")
 
             task_running = client_fhs.get_node("ns=6;s=::AsGlobalPV:TaskRunning")
-
-
-            ################ STORAGE OUTPUT ################
-
-            logger.debug("---------------------------")
-            logger.debug("shelfie " + str(global_desired_shelf.get_value()))
-            local_shelf = global_desired_shelf.get_value()-1   # Shelf 1-9 to array 0-8
-            logger.debug("Desired shelf on FHS Server is " + str(local_shelf+1))   # print shelf 1-9
-
-            logger.debug("---------------------------")
-            logger.debug("Storage containing " + str(len(global_storage)) + " fields")
-            i = 0
-            while i < len(global_storage):
-                logger.debug("[" + str(i+1) + "]: " + str(global_storage[i]))
-                i = i + 1
-
-            logger.debug("\n---------------------------")
-
-            if str(int(global_storage[local_shelf])) == "1":   # Shelf 0-8
-                logger.debug("Desired shelf [" + str(local_shelf+1) + "] is not empty")
-            else:
-                logger.debug("Desired shelf [" + str(local_shelf+1) + "] is empty")
-            logger.debug("---------------------------")
-
 
             ###### SUBSCRIBE TO SERVER DATA CHANGES #######
 
@@ -498,34 +479,46 @@ if __name__ == "__main__":
             logger.debug("\nClients disconnected and Server stopped")
             break
         except requests.exceptions.ConnectionError:
-            logger.debug("error connecting...")
+            logger.debug("Catched Exception: requests - connection to data stack")
         except Exception as e:
+            logger.debug("Catched Exception: " + str(e))
             try:
+                logger.debug("trying to disconnect from pixtend server")
                 client_pixtend.disconnect()
             except:
+                logger.debug("error while disconnecting pixtend server")
                 pass
             try:
+                logger.debug("trying to disconnect from panda server")
                 client_panda.disconnect()
             except:
+                logger.debug("error while disconnecting panda server")
                 pass
             try:
+                logger.debug("trying to disconnect from fhs server")
                 client_fhs.disconnect()
             except:
+                logger.debug("error while disconnecting fhs server")
                 pass
 
             # try connecting again
-            time.sleep(2**reconnect_counter)
-            reconnect_counter += 1
-            logger.debug("Error while connecting to servers - " + str(e) + " trying again in " + str(2**reconnect_counter) + " seconds.")
-            logger.debug(traceback.format_exc())
+            reconnect_counter *= 2
+            if reconnect_counter >= 14400:
+                logger.debug("Shutting program down - one of the servers is just not reachable")
+                break
+            time.sleep(reconnect_counter)
+
+            logger.debug("Error while connecting to servers - " + str(e) + " trying again in " + str(reconnect_counter) + " seconds.")
+            #logger.debug(traceback.format_exc())
+
+
+
             continue
         finally:
             server.stop()
-            logger.debug("\nClients disconnected and Server stopped")
+            logger.debug("Clients disconnected and Server stopped")
 
     # after while loop
     client_fhs.disconnect()
     client_panda.disconnect()
     client_pixtend.disconnect()
-
-
