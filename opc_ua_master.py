@@ -1,3 +1,4 @@
+
 #      _____         __        __                               ____                                        __
 #     / ___/ ____ _ / /____   / /_   __  __ _____ ____ _       / __ \ ___   _____ ___   ____ _ _____ _____ / /_
 #     \__ \ / __ `// //_  /  / __ \ / / / // ___// __ `/      / /_/ // _ \ / ___// _ \ / __ `// ___// ___// __ \
@@ -22,7 +23,6 @@ import sys
 import logging
 import traceback
 
-
 # create logger
 logger = logging.getLogger('dtz_master_controller')
 logger.setLevel(logging.DEBUG)
@@ -43,24 +43,23 @@ logger.addHandler(ch)
 # 'application' code
 logger.debug('debug message')
 logger.info('info message')
-logger.warning('warn message')
+logger.warn('warn message')
 logger.error('error message')
 logger.critical('critical message')
 
 sys.path.insert(0, "..")
 
-
 ################# GLOBAL VARIABLES #################
+
 global_url_opcua_adapter = "192.168.48.81:1337"
 global_url_panda_server = "opc.tcp://192.168.48.41:4840/freeopcua/server/"
 global_url_pixtend_server = "opc.tcp://192.168.48.42:4840/freeopcua/server/"
 global_url_fhs_server = "opc.tcp://192.168.10.102:4840"
 global_url_pseudo_fhs_server = "opc.tcp://192.168.48.44:4840/freeopcua/server/"
 
-global_desired_distance = 0.55  # distance in meters to drive the belt
-global_belt_velocity = 0.05428  # velocity of the belt in m/s (5.5cm/s)
-global_storage = []             # our storage data as an array
-
+desired_distance = 0.55  # distance in meters to drive the belt
+belt_velocity = 0.05428  # velocity of the belt in m/s (5.5cm/s)
+storage = []  # our storage data as an array
 global_new_val_available = None
 global_demonstrator_busy = None
 global_belt_moving = None
@@ -68,143 +67,51 @@ global_panda_moving = None
 global_object_panda = None
 global_object_pixtend = None
 global_desired_shelf = None
-global_belt_moved = None
-global_panda_moved = None
 
 
+##################### METHODS ######################
 
-######################################## CALL BY METHOD CALL ON MASTER #################################################
+def start_demo_core(movement):
+    logger.debug("in start demo core")
+    # global_object_panda.call_method("2:MoveRobotLibfranka", movement, str(global_desired_shelf.get_value()))
+    global_object_panda.call_method("2:MoveRobotRos", movement, str(global_desired_shelf.get_value()))
 
-
-def move_robot_core(self, movement, shelf_nr):
-    global global_panda_moving
-    global global_object_panda
-
-    # self.panda_obj.call_method("2:MoveRobotLibfranka", movement, str(shelf_nr))
-    global_object_panda.call_method("2:MoveRobotRos", movement, str(shelf_nr))
-    logger.debug("move robot to shelf %s", shelf_nr)
-    time.sleep(3)
-    self.panda_moved = False
-    logger.debug("robot core")
-    mytime = 0
-    while not global_panda_moving.get_value():
-        time.sleep(0.1)
-        mytime += 0.1
-        # panda does not react
-        if mytime >= 6:
-            logger.debug("waited for: %s seconds without detecting panda moving", mytime)
-            self.panda_moved = False
-            return False
-
-    logger.debug("out")
-
-    logger.debug("panda moving: " + str(global_panda_moving.get_value()))
     while global_panda_moving.get_value():
-        time.sleep(0.1)
-        logger.debug("panda move finished")
-    self.panda_moved = True
+        time.sleep(0.2)
+
+    global_object_pixtend.call_method("2:MoveBelt", "left", 0.55)  # drive 55cm right
+
+    while global_belt_moving.get_value():
+        time.sleep(0.2)
+
     return True
+
 
 @uamethod
-def move_belt_core(self, movement, shelf):
-    global global_belt_moved
-    global_belt_moved = False
-    global global_object_pixtend
-    global global_belt_moving
-
-    global_object_pixtend.call_method("2:MoveBelt", "left", 0.55)
-
-
-    wait_time = 0
-    while not global_belt_moving.get_value():
-        time.sleep(0.1)
-        wait_time += 0.1
-        logger.debug("time: %s", wait_time)
-        # panda does not react
-        if wait_time >= 3:
-            global_belt_moved = False
-            return False
-
-    global_belt_moved = True
-    return True
-
-
 def start_demo(parent, movement, shelf):
+    global storage
     global global_demonstrator_busy
-    global global_desired_shelf
-    global global_panda_moving
-    global global_belt_moving
-    global global_panda_moved
-    global global_belt_moved
-    global global_storage
 
-    exit = "None"
+    if storage[shelf] is "0":
+        return "Shelf empty - error!"
 
-    logger.debug("starting demo by method call")
+    elif not global_panda_moving.get_value() and not global_belt_moving.get_value():
 
-    if global_demonstrator_busy.get_value() is False:
-        logger.debug("global_demonstrator_busy: " + str(global_demonstrator_busy))
+        global_demonstrator_busy.set_value(True)
+        move_thread = threading.Thread(name='move_demo_thread', target=start_demo_core, args=(movement,))
+        move_thread.daemon = True
+        move_thread.start()
+        storage[shelf] = "0"  # make shelf empty
+        return "Demonstrator is busy - error!"
 
-        ############# LOAD STORAGE DATA  #############
-        # [1][2][3]
-        # [4][5][6]
-        # [7][8][9]
-        with open("./dtz_storage", "r", encoding="utf-8") as in_file:
-            for in_line in in_file:
-                global_storage.append(in_line)
+    else:
 
-        # IS THE STORAGE EMPTY?
-        logger.debug("In StartDemo - chosen shelf number is " + str(global_storage[shelf-1]))
-
-        if global_storage[shelf-1] is "0":
-            exit = "Shelf empty - error!"
-            logger.debug("Shelf empty - error!")
-        else:
-            logger.debug("Shelf not empty!")
-            global_demonstrator_busy.set_value(True)
-
-            # METHOD CALLS
-            move_panda_thread = threading.Thread(name='move_panda_thread', target=move_robot_core,
-                                                 args=("SO", global_desired_shelf.get_value(),))
-            move_panda_thread.daemon = True
-            move_panda_thread.start()
-            move_panda_thread.join()
-
-            # move_panda_thread.wait()
-
-            logger.debug("p_moved %s", global_panda_moved)
-            if global_panda_moved is True:
-                move_belt_thread = threading.Thread(name='move_belt_thread', target=move_belt_core,
-                                                    args=("left", 0.55,))
-                move_belt_thread.daemon = True
-                move_belt_thread.start()
-                global_storage[global_desired_shelf.get_value() - 1] = "0"
-                move_belt_thread.join()
-                if not global_belt_moved:
-                    logger.debug("Error - Belt not moved")
-                    exit = "Error - Belt not moved"
-            else:
-                logger.debug("Error - Panda not moved")
-                exit = "Error - Panda not moved"
-
-            ############# SAVE STORAGE DATA  #############
-            # [1][2][3]
-            # [4][5][6]
-            # [7][8][9]
-            with open("./dtz_storage", "w", encoding="utf-8") as out_file:
-                for out_line in global_storage:
-                    out_file.write(str(out_line))
-
-            exit = "Shelf not empty - successful!"
-
-    logger.debug("exiting datachange_notification. return message: %s", exit)
-    return exit
+        return "Shelf not empty - Demonstrator started!"
 
 
-######################################## CALL BY DATACHANGE ON FH SERVER ###############################################
+################ DATACHANGE HANDLER ################
 
 class SubHandler(object):
-
     """
     Subscription Handler. To receive events from server for a subscription
     data_change and event methods are called directly from receiving thread.
@@ -212,53 +119,56 @@ class SubHandler(object):
     thread if you need to do such a thing
     """
 
-    def __init__(self):
+    def __init__(self, shelf_nr, panda_moving, belt_moving, panda_object, pixtend_object):
+        self.shelf_nr = shelf_nr
+        self.panda_is_moving = panda_moving
+        self.belt_is_moving = belt_moving
+        self.panda_obj = panda_object
+        self.belt_obj = pixtend_object
+        self.storage = []
+        self.handler_panda_moving = None
+        self.handler_belt_moving = None
+        self.handler_demonstrator_busy = None
         self.panda_moved = False
         self.belt_moved = False
 
-
     def move_robot_core(self, movement, shelf_nr):
-        global global_panda_moving
-        global global_object_panda
 
-        #self.panda_obj.call_method("2:MoveRobotLibfranka", movement, str(shelf_nr))
-        global_object_panda.call_method("2:MoveRobotRos", movement, str(shelf_nr))
-        logger.debug("move robot to shelf %s",shelf_nr)
+        # self.panda_obj.call_method("2:MoveRobotLibfranka", movement, str(shelf_nr))
+        self.panda_obj.call_method("2:MoveRobotRos", movement, str(shelf_nr))
+        logger.debug("move robot to shelf %s", shelf_nr)
         time.sleep(3)
         self.panda_moved = False
         logger.debug("robot core")
         mytime = 0
-        while not global_panda_moving.get_value():
+        while not self.handler_panda_moving.get_value():
             time.sleep(0.1)
             mytime += 0.1
             # panda does not react
             if mytime >= 6:
-                logger.debug("waited for: %s seconds without detecting panda moving", mytime)
+                logger.debug("waited for: %.2s seconds without detecting panda moving", mytime)
                 self.panda_moved = False
                 return False
 
         logger.debug("out")
 
-        logger.debug("panda moving: " + str(global_panda_moving.get_value()))
-        while global_panda_moving.get_value():
+        logger.debug("panda moving: " + str(self.handler_panda_moving.get_value()))
+        while self.handler_panda_moving.get_value():
             time.sleep(0.1)
         logger.debug("panda move finished")
         self.panda_moved = True
         return True
 
-
     def move_belt_core(self, movement, distance):
-        global global_object_pixtend
-        global global_belt_moving
 
-        global_object_pixtend.call_method("2:MoveBelt", movement, distance)
+        self.belt_obj.call_method("2:MoveBelt", movement, distance)
         self.belt_moved = False
 
         mytime = 0
-        while not global_belt_moving.get_value():
+        while not self.handler_belt_moving.get_value():
             time.sleep(0.1)
             mytime += 0.1
-            logger.debug("time: %s", mytime)
+            #logger.debug("time: %.2s", mytime)
             # panda does not react
             if mytime >= 3:
                 self.belt_moved = False
@@ -267,96 +177,157 @@ class SubHandler(object):
         self.belt_moved = True
         return True
 
-
     def datachange_notification(self, node, val, data):
-        global global_demonstrator_busy
-        global global_desired_shelf
-        global global_panda_moving
-        global global_belt_moving
-        global global_storage
+        try:
 
-        logger.debug("Python: New data change event on fhs server: NewValAvailable=%s", val)
+            logger.debug("Python: New data change event on fhs server: NewValAvailable=%s", val)
 
+            # GET SOME VALUES FROM THIS SERVER
+            logger.debug("connecting to local Server")
+            this_client = Client("opc.tcp://0.0.0.0:4840/freeopcua/server")
+            this_client.connect()
+            this_client_root = this_client.get_root_node()
+            self.demonstrator_busy = this_client_root.get_child(
+                ["0:Objects", "2:DTZMasterController", "2:DemonstratorBusy"])
 
-        # data = NewValueAvailable
-        exit = "NewValAvailable is {}, demonstratorBusy is {}".format(val, global_demonstrator_busy.get_value())
+            # GET SOME VALUES FROM FHS SERVER
+            logger.debug("connecting to FHS Server")
+            handler_client_fhs = Client(global_url_pseudo_fhs_server)
+            handler_client_fhs.connect()
+            handler_root_fhs = handler_client_fhs.get_root_node()
+            # handler_object_fhs = handler_root_fhs.get_child(["0:Objects", "2:PLC"])
+            handler_desired_shelf = handler_client_fhs.get_node("ns=2;i=3")                                             # Testing with pseudo FH server
+            #handler_desired_shelf = handler_client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")                     # Original
 
-        if val is True and global_demonstrator_busy.get_value() is False :
-            logger.debug("global_demonstrator_busy: " + str(global_demonstrator_busy) + ". NewValAvailable: " + str(val) + ". ShelfNumber: " + str(global_desired_shelf.get_value()))
+            # GET VALUES FROM PANDA SERVER
+            logger.debug("connecting to Panda Server")
+            handler_client_panda = Client(global_url_panda_server)
+            handler_client_panda.connect()
+            handler_root_panda = handler_client_panda.get_root_node()
+            self.handler_panda_moving = handler_root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotMoving"])
 
-            ############# LOAD STORAGE DATA  #############
-            # [1][2][3]
-            # [4][5][6]
-            # [7][8][9]
-            with open("./dtz_storage", "r", encoding="utf-8") as in_file:
-                for in_line in in_file:
-                    global_storage.append(in_line)
+            # GET VALUES FROM PIXTEND SERVER
+            logger.debug("connecting to Pixtend Server")
+            handler_client_pixtend = Client(global_url_pixtend_server)
+            handler_client_pixtend.connect()
+            handler_root_pixtend = handler_client_pixtend.get_root_node()
+            self.handler_belt_moving = handler_root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
 
-
-            # IS THE STORAGE EMPTY?
-
-            global_storage[global_desired_shelf-1] = 1  ######################## <<<<<<<<<<<<<--- OVERRIDES NEXT LINE
-
-            if global_storage[global_desired_shelf-1] is "0":
-                exit = "Shelf empty - error!"
-            else:
-                global_demonstrator_busy.set_value(True)
-
-
-                # METHOD CALLS
-                move_panda_thread = threading.Thread(name='move_panda_thread', target=self.move_robot_core, args=("SO", global_desired_shelf.get_value(), ))
-                move_panda_thread.daemon = True
-                move_panda_thread.start()
-                move_panda_thread.join()
-
-               # move_panda_thread.wait()
-
-                logger.debug("p_moved %s", self.panda_moved)
-                if self.panda_moved is True:
-                    move_belt_thread = threading.Thread(name='move_belt_thread', target=self.move_belt_core, args=("left", 0.55,))
-                    move_belt_thread.daemon = True
-                    move_belt_thread.start()
-                    global_storage[global_desired_shelf.get_value()-1] = "0"
-                    move_belt_thread.join()
-                    if not self.belt_moved:
-                        logger.debug("Error - Belt not moved")
-                        exit = "Error - Belt not moved"
-                else:
-                    logger.debug("Error - Panda not moved")
-                    exit = "Error - Panda not moved"
+            # data = NewValueAvailable
+            demoBusy = self.demonstrator_busy.get_value()
+            exit = "NewValAvailable is {}, demonstratorBusy is {}".format(val, demoBusy)
 
 
-                ############# SAVE STORAGE DATA  #############
+
+
+            if val is True and demoBusy is False:
+                logger.debug("global_demonstrator_busy: " + str(demoBusy) + ". NewValAvailable: " + str(val) + ". ShelfNumber: " + str(handler_desired_shelf.get_value()) + ".")
+
+
+                ############# LOAD STORAGE DATA  #############
                 # [1][2][3]
                 # [4][5][6]
                 # [7][8][9]
-                with open("./dtz_storage", "w", encoding="utf-8") as out_file:
-                    for out_line in global_storage:
-                        out_file.write(str(out_line))
+                with open("./dtz_storage", "r", encoding="utf-8") as in_file:
+                    for in_line in in_file:
+                        self.storage.append(in_line)
 
-                exit = "Shelf not empty - successful!"
+                # IS THE STORAGE EMPTY?
+                self.storage[handler_desired_shelf.get_value()-1] = "1"
+
+                if self.storage[handler_desired_shelf.get_value()-1] is "0":
+                    exit = "Shelf empty - error!"
+                else:
+                    self.demonstrator_busy.set_value(True)
+
+                    # METHOD CALLS
+                    move_panda_thread = threading.Thread(name='move_panda_thread', target=self.move_robot_core,
+                                                         args=("SO", handler_desired_shelf.get_value(),))
+                    move_panda_thread.daemon = True
+                    move_panda_thread.start()
+                    move_panda_thread.join()
+
+                    # move_panda_thread.wait()
+
+                    #logger.debug("p_moved %s", self.panda_moved)
+                    if self.panda_moved is True:
+                        move_belt_thread = threading.Thread(name='move_belt_thread', target=self.move_belt_core,
+                                                            args=("left", 0.55,))
+                        move_belt_thread.daemon = True
+                        move_belt_thread.start()
+                        self.storage[handler_desired_shelf.get_value() - 1] = "0"
+                        move_belt_thread.join()
+                        if not self.belt_moved:
+                            logger.debug("Error - Belt not moved")
+                            exit = "Error - Belt not moved"
+                    else:
+                        logger.debug("Error - Panda not moved")
+                        exit = "Error - Panda not moved"
+
+                    handler_client_fhs.disconnect()
+                    handler_client_panda.disconnect()
+                    this_client.disconnect()
+
+
+                    ############# SAVE STORAGE DATA  #############
+                    # [1][2][3]
+                    # [4][5][6]
+                    # [7][8][9]
+                    with open("./dtz_storage", "w", encoding="utf-8") as out_file:
+                        for out_line in self.storage:
+                            out_file.write(str(out_line))
+
+        except Exception as e:
+            logger.debug("handler: Catched Exception: " + str(e))
+            try:
+                logger.debug("handler: trying to disconnect from pixtend server")
+                client_pixtend.disconnect()
+            except:
+                logger.debug("handler: error while disconnecting pixtend server")
+                pass
+            try:
+                logger.debug("handler: trying to disconnect from panda server")
+                client_panda.disconnect()
+            except:
+                logger.debug("handler: error while disconnecting panda server")
+                pass
+            try:
+                logger.debug("handler: trying to disconnect from fhs server")
+                client_fhs.disconnect()
+            except:
+                logger.debug("handler: error while disconnecting fhs server")
+                pass
+            return "handler: Error: " + str(e)
 
         logger.debug("exiting datachange_notification. return message: %s", exit)
         return exit
 
-
     def event_notification(self, event):
         logger.debug("Python: New event", event)
-
 
 
 ################################################# START #######################################################
 
 if __name__ == "__main__":
 
-    reconnect_counter = 1
-
     ################ CLIENT SETUP I ################
 
     client_panda = Client(global_url_panda_server)
     client_pixtend = Client(global_url_pixtend_server)
-    client_fhs = Client(global_url_fhs_server)
+    #client_fhs = Client(global_url_fhs_server)
+    client_fhs = Client(global_url_pseudo_fhs_server)
     # client = Client("opc.tcp://admin@localhost:4840/freeopcua/server/") #connect using a user
+
+    ############# LOAD STORAGE DATA  #############
+    # [1][2][3]
+    # [4][5][6]
+    # [7][8][9]
+    with open("./dtz_storage", "r", encoding="utf-8") as input_file:
+        for line in input_file:
+            storage.append(line)
+
+    # reconnection counter
+    reconnect_counter = 1
 
     ################ SERVER SETUP ################
 
@@ -390,7 +361,6 @@ if __name__ == "__main__":
 
             logger.debug("OPC-UA - Master - Server started at {}".format(url))
 
-
             ###############  CLIENT SETUP II ###############
 
             # connect to servers
@@ -406,13 +376,11 @@ if __name__ == "__main__":
             root_pixtend = client_pixtend.get_root_node()
             root_fhs = client_fhs.get_root_node()
 
-            # Connection successful?
-            reconnect_counter = 1
 
             ################ GET VARIABLES FROM SERVER ################
 
             # get our desired objects
-            #object_fhs = root_fhs.get_child(["0:Objects", "2:PLC"])
+            # object_fhs = root_fhs.get_child(["0:Objects", "2:PLC"])
             global_object_panda = root_panda.get_child(["0:Objects", "2:PandaRobot"])
             global_object_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt"])
 
@@ -429,20 +397,23 @@ if __name__ == "__main__":
             global_belt_moving = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
 
             # get the control values from fh salzburg server
-            global_desired_shelf = client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")
+            #global_desired_shelf = client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")                     ###### ORIGINAL!!!
+            global_desired_shelf = client_fhs.get_node("ns=2;i=3")                                             #Testing with pseudo FH server
+            local_shelf = global_desired_shelf.get_value() - 1  # Shelf 1-9 to array 0-8
 
-            global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:NewValAvailable")             ###### ORIGINAL!!!
+            #global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:NewValAvailable")             ###### ORIGINAL!!!
             #global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:StartRobot")
-
+            global_new_val_available = client_fhs.get_node("ns=2;i=4")                                         #Testing with pseudo FH server
             task_running = client_fhs.get_node("ns=6;s=::AsGlobalPV:TaskRunning")
 
-            ###### SUBSCRIBE TO SERVER DATA CHANGES #######
 
-            demo_handler = SubHandler( )
+
+            ###### SUBSCRIBE TO SERVER DATA CHANGES #######
+            demo_handler = SubHandler(str(local_shelf + 1), global_panda_moving.get_value(),
+                                      global_belt_moving.get_value(), global_object_panda, global_object_pixtend)
             sub = client_fhs.create_subscription(500, demo_handler)
             demo_handle = sub.subscribe_data_change(global_new_val_available)
             time.sleep(0.1)
-
 
             # Sending changed states to kafka stack
             tm = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
@@ -450,28 +421,28 @@ if __name__ == "__main__":
             # r2 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_state', 'timestamp': tm, 'conbelt_state': conbelt_state})
             # r3 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_dist', 'timestamp': tm, 'conbelt_dist': conbelt_dist})
 
-
             ########################### RUNNNING LOOP ##############################
             logger.debug("Starting and running...")
 
-            #task_running.set_value(True)
+            # task_running.set_value(True)
             global_demonstrator_busy.set_value(True)
 
-            while True:
-                #logger.debug("panda moving: " + str(global_panda_moving.get_value()) + ". belt_moving: " + str(global_belt_moving.get_value()))
 
-                #logger.debug("global_panda_moving: " + str(global_panda_moving.get_value()) + ". global_belt_moving: " + str(global_belt_moving.get_value()))
+
+            while True:
+                # logger.debug("panda moving: " + str(global_panda_moving.get_value()) + ". belt_moving: " + str(global_belt_moving.get_value()))
+                # logger.debug("global_panda_moving: " + str(global_panda_moving.get_value()) + ". global_belt_moving: " + str(global_belt_moving.get_value()))
 
                 if global_panda_moving.get_value() or global_belt_moving.get_value():
                     global_demonstrator_busy.set_value(True)
                 else:
                     global_demonstrator_busy.set_value(False)
 
+                # logger.debug("global_demonstrator busy: " + str(global_demonstrator_busy.get_value()))
+                time.sleep(0.4)
 
-                #logger.debug("global_demonstrator busy: " + str(global_demonstrator_busy.get_value()))
-
-                time.sleep(0.5)
-
+                # Connection successful?
+                reconnect_counter = 1
 
         except KeyboardInterrupt:
             logger.debug("\nCTRL+C pressed")
@@ -481,6 +452,7 @@ if __name__ == "__main__":
         except requests.exceptions.ConnectionError:
             logger.debug("Catched Exception: requests - connection to data stack")
         except Exception as e:
+
             logger.debug("Catched Exception: " + str(e))
             try:
                 logger.debug("trying to disconnect from pixtend server")
@@ -500,6 +472,12 @@ if __name__ == "__main__":
             except:
                 logger.debug("error while disconnecting fhs server")
                 pass
+            try:
+                logger.debug("trying to stop server")
+                server.stop()
+            except:
+                logger.debug("error while stopping server")
+                pass
 
             # try connecting again
             reconnect_counter *= 2
@@ -511,14 +489,6 @@ if __name__ == "__main__":
             logger.debug("Error while connecting to servers - " + str(e) + " trying again in " + str(reconnect_counter) + " seconds.")
             #logger.debug(traceback.format_exc())
 
-
-
             continue
-        finally:
-            server.stop()
-            logger.debug("Clients disconnected and Server stopped")
 
-    # after while loop
-    client_fhs.disconnect()
-    client_panda.disconnect()
-    client_pixtend.disconnect()
+
