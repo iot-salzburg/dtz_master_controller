@@ -192,12 +192,12 @@ class SubHandler(object):
 
             # GET SOME VALUES FROM FHS SERVER
             logger.debug("connecting to FHS Server")
-            handler_client_fhs = Client(global_url_pseudo_fhs_server)
+            #handler_client_fhs = Client(global_url_pseudo_fhs_server)                                                  # Testing with pseudo FH server
+            handler_client_fhs = Client(global_url_fhs_server)                                                          # Original
             handler_client_fhs.connect()
             handler_root_fhs = handler_client_fhs.get_root_node()
-            # handler_object_fhs = handler_root_fhs.get_child(["0:Objects", "2:PLC"])
-            handler_desired_shelf = handler_client_fhs.get_node("ns=2;i=3")                                             # Testing with pseudo FH server
-            #handler_desired_shelf = handler_client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")                     # Original
+            #handler_desired_shelf = handler_client_fhs.get_node("ns=2;i=3")                                            # Testing with pseudo FH server
+            handler_desired_shelf = handler_client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")                      # Original
 
             # GET VALUES FROM PANDA SERVER
             logger.debug("connecting to Panda Server")
@@ -314,8 +314,8 @@ if __name__ == "__main__":
 
     client_panda = Client(global_url_panda_server)
     client_pixtend = Client(global_url_pixtend_server)
-    #client_fhs = Client(global_url_fhs_server)
-    client_fhs = Client(global_url_pseudo_fhs_server)
+    client_fhs = Client(global_url_fhs_server)                                                                          # Original
+    #client_fhs = Client(global_url_pseudo_fhs_server)                                                                  # Testing with pseudo FH server
     # client = Client("opc.tcp://admin@localhost:4840/freeopcua/server/") #connect using a user
 
     ############# LOAD STORAGE DATA  #############
@@ -397,13 +397,12 @@ if __name__ == "__main__":
             global_belt_moving = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
 
             # get the control values from fh salzburg server
-            #global_desired_shelf = client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")                     ###### ORIGINAL!!!
-            global_desired_shelf = client_fhs.get_node("ns=2;i=3")                                             #Testing with pseudo FH server
+            global_desired_shelf = client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")                               # Original
+            #global_desired_shelf = client_fhs.get_node("ns=2;i=3")                                                     # Testing with pseudo FH server
             local_shelf = global_desired_shelf.get_value() - 1  # Shelf 1-9 to array 0-8
 
-            #global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:NewValAvailable")             ###### ORIGINAL!!!
-            #global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:StartRobot")
-            global_new_val_available = client_fhs.get_node("ns=2;i=4")                                         #Testing with pseudo FH server
+            global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:NewValAvailable")                       # Original
+            #global_new_val_available = client_fhs.get_node("ns=2;i=4")                                                 #Testing with pseudo FH server
             task_running = client_fhs.get_node("ns=6;s=::AsGlobalPV:TaskRunning")
 
 
