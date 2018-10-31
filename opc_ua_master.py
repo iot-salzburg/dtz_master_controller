@@ -1,4 +1,3 @@
-
 #      _____         __        __                               ____                                        __
 #     / ___/ ____ _ / /____   / /_   __  __ _____ ____ _       / __ \ ___   _____ ___   ____ _ _____ _____ / /_
 #     \__ \ / __ `// //_  /  / __ \ / / / // ___// __ `/      / /_/ // _ \ / ___// _ \ / __ `// ___// ___// __ \
@@ -49,6 +48,7 @@ logger.critical('critical message')
 
 sys.path.insert(0, "..")
 
+
 ################# GLOBAL VARIABLES #################
 
 global_url_opcua_adapter = "192.168.48.81:1337"
@@ -60,6 +60,7 @@ global_url_pseudo_fhs_server = "opc.tcp://192.168.48.44:4840/freeopcua/server/"
 desired_distance = 0.55  # distance in meters to drive the belt
 belt_velocity = 0.05428  # velocity of the belt in m/s (5.5cm/s)
 storage = []  # our storage data as an array
+
 global_new_val_available = None
 global_demonstrator_busy = None
 global_belt_moving = None
@@ -72,6 +73,7 @@ global_desired_shelf = None
 ##################### METHODS ######################
 
 def start_demo_core(movement):
+
     logger.debug("in start demo core")
     # global_object_panda.call_method("2:MoveRobotLibfranka", movement, str(global_desired_shelf.get_value()))
     global_object_panda.call_method("2:MoveRobotRos", movement, str(global_desired_shelf.get_value()))
@@ -87,8 +89,10 @@ def start_demo_core(movement):
     return True
 
 
+
 @uamethod
 def start_demo(parent, movement, shelf):
+
     global storage
     global global_demonstrator_busy
 
@@ -102,6 +106,7 @@ def start_demo(parent, movement, shelf):
         move_thread.daemon = True
         move_thread.start()
         storage[shelf] = "0"  # make shelf empty
+
         return "Demonstrator is busy - error!"
 
     else:
@@ -112,6 +117,7 @@ def start_demo(parent, movement, shelf):
 ################ DATACHANGE HANDLER ################
 
 class SubHandler(object):
+
     """
     Subscription Handler. To receive events from server for a subscription
     data_change and event methods are called directly from receiving thread.
@@ -132,11 +138,13 @@ class SubHandler(object):
         self.panda_moved = False
         self.belt_moved = False
 
+
     def move_robot_core(self, movement, shelf_nr):
 
         # self.panda_obj.call_method("2:MoveRobotLibfranka", movement, str(shelf_nr))
         self.panda_obj.call_method("2:MoveRobotRos", movement, str(shelf_nr))
         logger.debug("move robot to shelf %s", shelf_nr)
+
         time.sleep(3)
         self.panda_moved = False
         logger.debug("robot core")
@@ -146,6 +154,7 @@ class SubHandler(object):
             mytime += 0.1
             # panda does not react
             if mytime >= 6:
+
                 logger.debug("waited for: %.2s seconds without detecting panda moving", mytime)
                 self.panda_moved = False
                 return False
@@ -168,6 +177,7 @@ class SubHandler(object):
         while not self.handler_belt_moving.get_value():
             time.sleep(0.1)
             mytime += 0.1
+
             #logger.debug("time: %.2s", mytime)
             # panda does not react
             if mytime >= 3:
@@ -176,6 +186,7 @@ class SubHandler(object):
 
         self.belt_moved = True
         return True
+
 
     def datachange_notification(self, node, val, data):
         try:
@@ -306,11 +317,12 @@ class SubHandler(object):
         logger.debug("Python: New event", event)
 
 
-################################################# START #######################################################
+        ################################################# START #######################################################
 
 if __name__ == "__main__":
 
     ################ CLIENT SETUP I ################
+
 
     client_panda = Client(global_url_panda_server)
     client_pixtend = Client(global_url_pixtend_server)
@@ -328,6 +340,7 @@ if __name__ == "__main__":
 
     # reconnection counter
     reconnect_counter = 1
+
 
     ################ SERVER SETUP ################
 
@@ -361,6 +374,7 @@ if __name__ == "__main__":
 
             logger.debug("OPC-UA - Master - Server started at {}".format(url))
 
+
             ###############  CLIENT SETUP II ###############
 
             # connect to servers
@@ -380,7 +394,9 @@ if __name__ == "__main__":
             ################ GET VARIABLES FROM SERVER ################
 
             # get our desired objects
-            # object_fhs = root_fhs.get_child(["0:Objects", "2:PLC"])
+
+            #object_fhs = root_fhs.get_child(["0:Objects", "2:PLC"])
+
             global_object_panda = root_panda.get_child(["0:Objects", "2:PandaRobot"])
             global_object_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt"])
 
@@ -397,6 +413,7 @@ if __name__ == "__main__":
             global_belt_moving = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
 
             # get the control values from fh salzburg server
+
             global_desired_shelf = client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")                               # Original
             #global_desired_shelf = client_fhs.get_node("ns=2;i=3")                                                     # Testing with pseudo FH server
             local_shelf = global_desired_shelf.get_value() - 1  # Shelf 1-9 to array 0-8
@@ -410,15 +427,18 @@ if __name__ == "__main__":
             ###### SUBSCRIBE TO SERVER DATA CHANGES #######
             demo_handler = SubHandler(str(local_shelf + 1), global_panda_moving.get_value(),
                                       global_belt_moving.get_value(), global_object_panda, global_object_pixtend)
+
             sub = client_fhs.create_subscription(500, demo_handler)
             demo_handle = sub.subscribe_data_change(global_new_val_available)
             time.sleep(0.1)
 
+            
             # Sending changed states to kafka stack
             tm = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
             # r1 = requests.post(url_opcua_adapter,data={'id': 'pandapc.panda_state', 'timestamp': tm, 'panda_state': panda_state})
             # r2 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_state', 'timestamp': tm, 'conbelt_state': conbelt_state})
             # r3 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_dist', 'timestamp': tm, 'conbelt_dist': conbelt_dist})
+
 
             ########################### RUNNNING LOOP ##############################
             logger.debug("Starting and running...")
@@ -431,6 +451,7 @@ if __name__ == "__main__":
             while True:
                 # logger.debug("panda moving: " + str(global_panda_moving.get_value()) + ". belt_moving: " + str(global_belt_moving.get_value()))
                 # logger.debug("global_panda_moving: " + str(global_panda_moving.get_value()) + ". global_belt_moving: " + str(global_belt_moving.get_value()))
+
 
                 if global_panda_moving.get_value() or global_belt_moving.get_value():
                     global_demonstrator_busy.set_value(True)
@@ -489,5 +510,6 @@ if __name__ == "__main__":
             #logger.debug(traceback.format_exc())
 
             continue
+
 
 
