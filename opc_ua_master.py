@@ -390,9 +390,10 @@ if __name__ == "__main__":
             panda_state = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotState"])
             global_panda_moving = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotMoving"])
 
-            mover_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:MoveBelt"])
+            
             conbelt_state = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltState"])
             conbelt_dist = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltDist"])
+            busy_light = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:SwitchBusyLight"])
 
             global_belt_moving = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
 
@@ -433,8 +434,10 @@ if __name__ == "__main__":
                 # logger.debug("global_panda_moving: " + str(global_panda_moving.get_value()) + ". global_belt_moving: " + str(global_belt_moving.get_value()))
 
                 if global_panda_moving.get_value() or global_belt_moving.get_value():
+                    global_object_pixtend.call_method("2:SwitchBusyLight", True)        # switch the alarm light to red - means the demonstrator is working
                     global_demonstrator_busy.set_value(True)
                 else:
+                    global_object_pixtend.call_method("2:SwitchBusyLight", False)       # switch the alarm light to green - means the demonstrator is not working
                     global_demonstrator_busy.set_value(False)
 
                 # logger.debug("global_demonstrator busy: " + str(global_demonstrator_busy.get_value()))
