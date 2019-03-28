@@ -512,8 +512,8 @@ if __name__ == "__main__":
                 # logger.debug("panda moving: " + str(global_panda_moving.get_value()) + ". belt_moving: " + str(global_belt_moving.get_value()))
                 # logger.debug("global_panda_moving: " + str(global_panda_moving.get_value()) + ". global_belt_moving: " + str(global_belt_moving.get_value()))
 
-                   #global_panda_moving.get_value() or 
-                if global_belt_moving.get_value():
+                    
+                if global_panda_moving.get_value() or global_belt_moving.get_value():
                     global_object_pixtend.call_method("2:SwitchBusyLight", True)        # switch the alarm light to red - means the demonstrator is working
                     global_demonstrator_busy.set_value(True)
                 else:
