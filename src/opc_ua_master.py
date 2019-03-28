@@ -360,7 +360,32 @@ if __name__ == "__main__":
     mover = master_object.add_method(idx, "MoveDemonstrator", start_demo, [ua.VariantType.String, ua.VariantType.Int64],
                                      [ua.VariantType.Boolean])
 
+    # start server
+    server.start()
+    logger.debug("OPC-UA - Master - Server started at {}".format(url))
+
     while True:
+        ###############   START SERVER   ###############
+
+
+        try:
+            # check if server is really running by setting one of the variables
+            global_demonstrator_busy.set_value(True)
+        except:
+
+            try:
+                logger.debug("Server not running?")
+                server.start()
+                logger.debug("OPC-UA - Master - Server started at {}".format(url))
+            except:
+                logger.debug("killing and restarting server")
+                # server has a problem, so kill it and try again
+                server.stop()
+                server.start()
+
+        logger.debug("retrying connection to panda, fh, pixtend, .. in " + str(retry_counter) + " seconds.")
+        time.sleep(retry_counter)
+
 
         ###############  CONNECT TO PANDA SERVER ###############
         try:
@@ -473,26 +498,22 @@ if __name__ == "__main__":
             # r3 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_dist', 'timestamp': tm, 'conbelt_dist': conbelt_dist})
 
             ########################### RUNNNING LOOP ##############################
-            logger.debug("Starting and running...")
+            #logger.debug("Starting and running...")
 
         except requests.exceptions.ConnectionError:
             logger.debug("Catched Exception: requests - connection to data stack")
 
 
 
-        ###############   START SERVER   ###############
+        ############### SERVER RUNNING ROUTINE #######################
         try:
-
-            server.start()
-            logger.debug("OPC-UA - Master - Server started at {}".format(url))
-
-
+            logger.debug("Going into server loop")
             while True:
                 # logger.debug("panda moving: " + str(global_panda_moving.get_value()) + ". belt_moving: " + str(global_belt_moving.get_value()))
                 # logger.debug("global_panda_moving: " + str(global_panda_moving.get_value()) + ". global_belt_moving: " + str(global_belt_moving.get_value()))
 
-
-                if global_panda_moving.get_value() or global_belt_moving.get_value():
+                   #global_panda_moving.get_value() or 
+                if global_belt_moving.get_value():
                     global_object_pixtend.call_method("2:SwitchBusyLight", True)        # switch the alarm light to red - means the demonstrator is working
                     global_demonstrator_busy.set_value(True)
                 else:
@@ -502,7 +523,6 @@ if __name__ == "__main__":
 
                 # logger.debug("global_demonstrator busy: " + str(global_demonstrator_busy.get_value()))
                 time.sleep(0.5)
-
 
         except Exception as e:
             logger.debug("Catched Exception: " + str(e))
@@ -525,20 +545,11 @@ if __name__ == "__main__":
             except:
                 logger.debug("fhs server was disconnected")
                 pass
-            try:
-                logger.debug("trying to stop server")
-                server.stop()
-            except:
-                logger.debug("error while stopping server")
-                pass
+
             retry_counter = retry_counter*2
 
             if retry_counter > 40:
                 retry_counter = 1
-
-            logger.debug("Error in running server - " + str(e) + " trying again in " + str(retry_counter) + " seconds.")
-
-            time.sleep(retry_counter)
 
 
 
