@@ -99,13 +99,14 @@ def start_demo(parent, movement, shelf):
     global storage
     global global_demonstrator_busy
 
-    if storage[shelf] is "0":
+    #if storage[shelf] is "0":  # can be activated - robot then only moves once per shelf number
+    if False:
         return "Shelf empty - error!"
 
     elif not global_panda_moving.get_value() and not global_belt_moving.get_value():
 
         global_demonstrator_busy.set_value(True)
-        move_thread = threading.Thread(name='move_demo_thread', target=start_demo_core, args=(movement,shelf,))
+        move_thread = threading.Thread(name='move_demo_thread', target=start_demo_core, args=(movement, shelf,))
         move_thread.daemon = True
         move_thread.start()
         storage[shelf] = "0"  # make shelf empty
@@ -175,7 +176,7 @@ class SubHandler(object):
         while not self.handler_belt_moving.get_value():
             time.sleep(0.1)
             mytime += 0.1
-            #logger.debug("time: %.2s", mytime)
+            # logger.debug("time: %.2s", mytime)
             # panda does not react
             if mytime >= 3:
                 self.belt_moved = False
@@ -199,12 +200,12 @@ class SubHandler(object):
 
             # GET SOME VALUES FROM FHS SERVER
             logger.debug("connecting to FHS Server")
-            #handler_client_fhs = Client(global_url_pseudo_fhs_server)                                                  # Testing with pseudo FH server
-            handler_client_fhs = Client(global_url_fhs_server)                                                          # Original
+            # handler_client_fhs = Client(global_url_pseudo_fhs_server)                                                  # Testing with pseudo FH server
+            handler_client_fhs = Client(global_url_fhs_server)  # Original
             handler_client_fhs.connect()
             handler_root_fhs = handler_client_fhs.get_root_node()
-            #handler_desired_shelf = handler_client_fhs.get_node("ns=2;i=3")                                            # Testing with pseudo FH server
-            handler_desired_shelf = handler_client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")                      # Original
+            # handler_desired_shelf = handler_client_fhs.get_node("ns=2;i=3")                                            # Testing with pseudo FH server
+            handler_desired_shelf = handler_client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")  # Original
 
             # GET VALUES FROM PANDA SERVER
             logger.debug("connecting to Panda Server")
@@ -218,18 +219,16 @@ class SubHandler(object):
             handler_client_pixtend = Client(global_url_pixtend_server)
             handler_client_pixtend.connect()
             handler_root_pixtend = handler_client_pixtend.get_root_node()
-            self.handler_belt_moving = handler_root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
+            self.handler_belt_moving = handler_root_pixtend.get_child(
+                ["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
 
             # data = NewValueAvailable
             demoBusy = self.demonstrator_busy.get_value()
             exit = "NewValAvailable is {}, demonstratorBusy is {}".format(val, demoBusy)
 
-
-
-
             if val is True and demoBusy is False:
-                logger.debug("global_demonstrator_busy: " + str(demoBusy) + ". NewValAvailable: " + str(val) + ". ShelfNumber: " + str(handler_desired_shelf.get_value()) + ".")
-
+                logger.debug("global_demonstrator_busy: " + str(demoBusy) + ". NewValAvailable: " + str(
+                    val) + ". ShelfNumber: " + str(handler_desired_shelf.get_value()) + ".")
 
                 ############# LOAD STORAGE DATA  #############
                 # [1][2][3]
@@ -241,9 +240,10 @@ class SubHandler(object):
                         self.storage.append(in_line)
 
                 # IS THE STORAGE EMPTY?
-                self.storage[handler_desired_shelf.get_value()-1] = "1"
+                self.storage[handler_desired_shelf.get_value() - 1] = "1"
 
-                if self.storage[handler_desired_shelf.get_value()-1] is "0":
+                #if self.storage[handler_desired_shelf.get_value() - 1] is "0":   # commented because of problems with demonstrator
+                if False:
                     exit = "Shelf empty - error!"
                 else:
                     self.demonstrator_busy.set_value(True)
@@ -257,7 +257,7 @@ class SubHandler(object):
 
                     # move_panda_thread.wait()
 
-                    #logger.debug("p_moved %s", self.panda_moved)
+                    # logger.debug("p_moved %s", self.panda_moved)
                     if self.panda_moved is True:
                         move_belt_thread = threading.Thread(name='move_belt_thread', target=self.move_belt_core,
                                                             args=("left", 0.55,))
@@ -275,7 +275,6 @@ class SubHandler(object):
                     handler_client_fhs.disconnect()
                     handler_client_panda.disconnect()
                     this_client.disconnect()
-
 
                     ############# SAVE STORAGE DATA  #############
                     # [1][2][3]
@@ -322,9 +321,9 @@ if __name__ == "__main__":
 
     client_panda = Client(global_url_panda_server)
     client_pixtend = Client(global_url_pixtend_server)
-    client_fhs = Client(global_url_fhs_server)                                                                          # Original
-    #client_fhs = Client(global_url_pseudo_fhs_server)                                                                  # Testing with pseudo FH server
-    #client = Client("opc.tcp://admin@localhost:4840/freeopcua/server/") #connect using a user
+    client_fhs = Client(global_url_fhs_server)  # Original
+    # client_fhs = Client(global_url_pseudo_fhs_server)                                                                  # Testing with pseudo FH server
+    # client = Client("opc.tcp://admin@localhost:4840/freeopcua/server/") #connect using a user
 
     ############# LOAD STORAGE DATA  #############
     # [1][2][3]
@@ -367,7 +366,6 @@ if __name__ == "__main__":
     while True:
         ###############   START SERVER   ###############
 
-
         try:
             # check if server is really running by setting one of the variables
             global_demonstrator_busy.set_value(True)
@@ -385,7 +383,6 @@ if __name__ == "__main__":
 
         logger.debug("retrying connection to panda, fh, pixtend, .. in " + str(retry_counter) + " seconds.")
         time.sleep(retry_counter)
-
 
         ###############  CONNECT TO PANDA SERVER ###############
         try:
@@ -443,8 +440,6 @@ if __name__ == "__main__":
                 logger.debug("pixtend server was disconnected")
                 pass
 
-
-
         ###############  CONNECT TO FH SERVER ###############
         try:
             # connect to fhs server
@@ -461,12 +456,12 @@ if __name__ == "__main__":
             # VALUES
 
             # get the control values from fh salzburg server
-            global_desired_shelf = client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")                               # Original
-            #global_desired_shelf = client_fhs.get_node("ns=2;i=3")                                                     # Testing with pseudo FH server
+            global_desired_shelf = client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")  # Original
+            # global_desired_shelf = client_fhs.get_node("ns=2;i=3")                                                     # Testing with pseudo FH server
             local_shelf = global_desired_shelf.get_value() - 1  # Shelf 1-9 to array 0-8
 
-            global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:NewValAvailable")                       # Original
-            #global_new_val_available = client_fhs.get_node("ns=2;i=4")                                                 #Testing with pseudo FH server
+            global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:NewValAvailable")  # Original
+            # global_new_val_available = client_fhs.get_node("ns=2;i=4")                                                 #Testing with pseudo FH server
             task_running = client_fhs.get_node("ns=6;s=::AsGlobalPV:TaskRunning")
 
             ###### SUBSCRIBE TO SERVER DATA CHANGE ON FH SERVER #######
@@ -486,8 +481,6 @@ if __name__ == "__main__":
                 logger.debug("fh server was disconnected")
                 pass
 
-
-
         ###############  CHRIS' DATASTACK  ###############
         try:
 
@@ -498,12 +491,10 @@ if __name__ == "__main__":
             # r3 = requests.post(url_opcua_adapter, data={'id': 'pixtend.conbelt_dist', 'timestamp': tm, 'conbelt_dist': conbelt_dist})
 
             ########################### RUNNNING LOOP ##############################
-            #logger.debug("Starting and running...")
+            # logger.debug("Starting and running...")
 
         except requests.exceptions.ConnectionError:
             logger.debug("Catched Exception: requests - connection to data stack")
-
-
 
         ############### SERVER RUNNING ROUTINE #######################
         try:
@@ -512,14 +503,14 @@ if __name__ == "__main__":
                 # logger.debug("panda moving: " + str(global_panda_moving.get_value()) + ". belt_moving: " + str(global_belt_moving.get_value()))
                 # logger.debug("global_panda_moving: " + str(global_panda_moving.get_value()) + ". global_belt_moving: " + str(global_belt_moving.get_value()))
 
-                    
                 if global_panda_moving.get_value() or global_belt_moving.get_value():
-                    global_object_pixtend.call_method("2:SwitchBusyLight", True)        # switch the alarm light to red - means the demonstrator is working
+                    global_object_pixtend.call_method("2:SwitchBusyLight",
+                                                      True)  # switch the alarm light to red - means the demonstrator is working
                     global_demonstrator_busy.set_value(True)
                 else:
-                    global_object_pixtend.call_method("2:SwitchBusyLight", False)       # switch the alarm light to green - means the demonstrator is not working
+                    global_object_pixtend.call_method("2:SwitchBusyLight",
+                                                      False)  # switch the alarm light to green - means the demonstrator is not working
                     global_demonstrator_busy.set_value(False)
-
 
                 # logger.debug("global_demonstrator busy: " + str(global_demonstrator_busy.get_value()))
                 time.sleep(0.5)
@@ -546,7 +537,7 @@ if __name__ == "__main__":
                 logger.debug("fhs server was disconnected")
                 pass
 
-            retry_counter = retry_counter*2
+            retry_counter = retry_counter * 2
 
             if retry_counter > 40:
                 retry_counter = 1
@@ -559,4 +550,4 @@ if __name__ == "__main__":
             logger.debug("\nClients disconnected and Server stopped")
             break
 
-            #logger.debug(traceback.format_exc())#
+            # logger.debug(traceback.format_exc())#
