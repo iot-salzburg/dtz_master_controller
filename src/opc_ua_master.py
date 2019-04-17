@@ -109,7 +109,7 @@ def start_demo(parent, movement, shelf):
         move_thread = threading.Thread(name='move_demo_thread', target=start_demo_core, args=(movement, shelf,))
         move_thread.daemon = True
         move_thread.start()
-        storage[shelf] = "0"  # make shelf empty
+        # storage[shelf] = "0"  # make shelf empty
         return "Successful"
 
     else:
