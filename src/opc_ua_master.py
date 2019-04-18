@@ -66,55 +66,7 @@ global_panda_moving = None
 global_object_panda = None
 global_object_pixtend = None
 global_desired_shelf = None
-
-
-##################### METHODS ######################
-
-def start_demo_core(movement, shelf):
-    logger.debug("in start demo core")
-    # global_object_panda.call_method("2:MoveRobotLibfranka", movement, str(global_desired_shelf.get_value()))
-    global_object_panda.call_method("2:MoveRobotRos", movement, str(shelf))
-
-    # wait for robot to even react otherwise the code would jump instantly to the end
-    while not global_panda_moving.get_value():
-        time.sleep(0.2)
-
-    while global_panda_moving.get_value():
-        time.sleep(0.2)
-
-    global_object_pixtend.call_method("2:MoveBelt", "left", 0.55)  # drive 55cm right
-
-    # wait for belt to even react otherwise the code would jump instantly to the end
-    while not global_belt_moving.get_value:
-        time.sleep(0.2)
-
-    while global_belt_moving.get_value():
-        time.sleep(0.2)
-
-    return True
-
-
-@uamethod
-def start_demo(parent, movement, shelf):
-    global storage
-    global global_demonstrator_busy
-
-    #if storage[shelf] is "0":  # can be activated - robot then only moves once per shelf number
-    if False:
-        return "Shelf empty - error!"
-
-    elif not global_panda_moving.get_value() and not global_belt_moving.get_value():
-
-        global_demonstrator_busy.set_value(True)
-        move_thread = threading.Thread(name='move_demo_thread', target=start_demo_core, args=(movement, shelf,))
-        move_thread.daemon = True
-        move_thread.start()
-        # storage[shelf] = "0"  # make shelf empty
-        return "Successful"
-
-    else:
-
-        return "Shelf not empty - Demonstrator started!"
+subhandler_already_created = False
 
 
 ################ DATACHANGE HANDLER ################
@@ -188,10 +140,10 @@ class SubHandler(object):
     def datachange_notification(self, node, val, data):
         try:
 
-            logger.debug("Python: New data change event on fhs server: NewValAvailable=%s", val)
+            logger.debug("handler: New data change event on fhs server: NewValAvailable=%s", val)
 
             # GET SOME VALUES FROM THIS SERVER
-            logger.debug("connecting to local Server")
+            logger.debug("handler: connecting to DTZ master Server")
             this_client = Client("opc.tcp://0.0.0.0:4840/freeopcua/server")
             this_client.connect()
             this_client_root = this_client.get_root_node()
@@ -199,7 +151,7 @@ class SubHandler(object):
                 ["0:Objects", "2:DTZMasterController", "2:DemonstratorBusy"])
 
             # GET SOME VALUES FROM FHS SERVER
-            logger.debug("connecting to FHS Server")
+            logger.debug("handler: connecting to FHS Server")
             # handler_client_fhs = Client(global_url_pseudo_fhs_server)                                                  # Testing with pseudo FH server
             handler_client_fhs = Client(global_url_fhs_server)  # Original
             handler_client_fhs.connect()
@@ -208,14 +160,14 @@ class SubHandler(object):
             handler_desired_shelf = handler_client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")  # Original
 
             # GET VALUES FROM PANDA SERVER
-            logger.debug("connecting to Panda Server")
+            logger.debug("handler: connecting to Panda Server")
             handler_client_panda = Client(global_url_panda_server)
             handler_client_panda.connect()
             handler_root_panda = handler_client_panda.get_root_node()
             self.handler_panda_moving = handler_root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotMoving"])
 
             # GET VALUES FROM PIXTEND SERVER
-            logger.debug("connecting to Pixtend Server")
+            logger.debug("handler: connecting to Pixtend Server")
             handler_client_pixtend = Client(global_url_pixtend_server)
             handler_client_pixtend.connect()
             handler_root_pixtend = handler_client_pixtend.get_root_node()
@@ -272,9 +224,7 @@ class SubHandler(object):
                         logger.debug("Error - Panda not moved")
                         exit = "Error - Panda not moved"
 
-                    handler_client_fhs.disconnect()
-                    handler_client_panda.disconnect()
-                    this_client.disconnect()
+
 
                     ############# SAVE STORAGE DATA  #############
                     # [1][2][3]
@@ -284,25 +234,33 @@ class SubHandler(object):
                         for out_line in self.storage:
                             out_file.write(str(out_line))
 
+            logger.debug("handler: disconnect from fhs server")
+            handler_client_fhs.disconnect()
+            logger.debug("handler: disconnect from panda server")
+            handler_client_panda.disconnect()
+            logger.debug("handler: disconnect from pixtend server")
+            handler_client_pixtend.disconnect()
+            this_client.disconnect()
+
         except Exception as e:
             logger.debug("handler: Catched Exception: " + str(e))
             try:
                 logger.debug("handler: trying to disconnect from pixtend server")
-                client_pixtend.disconnect()
+                handler_client_pixtend.disconnect() 
             except:
-                logger.debug("handler: error while disconnecting pixtend server")
+                logger.debug("handler: pixtend server was disconnected")
                 pass
             try:
                 logger.debug("handler: trying to disconnect from panda server")
-                client_panda.disconnect()
+                handler_client_panda.disconnect()
             except:
-                logger.debug("handler: error while disconnecting panda server")
+                logger.debug("handler: panda server was disconnected")
                 pass
             try:
                 logger.debug("handler: trying to disconnect from fhs server")
-                client_fhs.disconnect()
+                handler_client_fhs.disconnect()
             except:
-                logger.debug("handler: error while disconnecting fhs server")
+                logger.debug("handler: fhs server was disconnected")
                 pass
             return "handler: Error: " + str(e)
 
@@ -311,6 +269,245 @@ class SubHandler(object):
 
     def event_notification(self, event):
         logger.debug("Python: New event", event)
+
+
+
+######################### CONNECTION THREADS #################
+
+###############  THREAD - CONNECT TO FH SERVER ###############
+# FH Connection in separate thread
+def threaded_fh_connection():
+    # reconnection counter
+    fh_counter = 1
+
+    global global_desired_shelf
+    global global_panda_moving
+    global global_belt_moving
+    global global_object_panda
+    global global_object_pixtend
+    global global_new_val_available
+    global subhandler_already_created
+    temp = None
+    sub = None
+
+    while True:
+        try:
+            # connect to fhs server
+            logger.debug("threaded: connecting to fhs server")
+            client_fhs.connect()
+            logger.debug("threaded: successful connected to fhs")
+
+            # Get root nodes
+            root_fhs = client_fhs.get_root_node()
+
+            ########## GET VARIABLES FROM SERVER ##########
+            # get our desired objects
+            # object_fhs = root_fhs.get_child(["0:Objects", "2:PLC"])
+
+            # VALUES
+            # get the control values from fh salzburg server
+            global_desired_shelf = client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")  # Original
+            # global_desired_shelf = client_fhs.get_node("ns=2;i=3")                                                     # Testing with pseudo FH server
+            local_shelf = global_desired_shelf.get_value() - 1  # Shelf 1-9 to array 0-8
+
+            global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:NewValAvailable")  # Original
+            # global_new_val_available = client_fhs.get_node("ns=2;i=4")                                                 #Testing with pseudo FH server
+            task_running = client_fhs.get_node("ns=6;s=::AsGlobalPV:TaskRunning")
+            
+
+            ###### SUBSCRIBE TO SERVER DATA CHANGE ON FH SERVER #######
+            demo_handler = SubHandler(str(local_shelf + 1), global_panda_moving.get_value(),
+                                    global_belt_moving.get_value(), global_object_panda, global_object_pixtend)
+
+            logger.debug("threaded: create subscription handle fh server")
+            sub = client_fhs.create_subscription(500, demo_handler)
+            demo_handle = sub.subscribe_data_change(global_new_val_available)
+
+            # everything went fine? then wait
+            while True:
+                temp = global_desired_shelf.get_value()
+                time.sleep(5)
+  
+
+        except Exception as e:
+            logger.debug("threaded: Catched Exception: " + str(e))
+            try:
+                logger.debug("threaded: trying to disconnect from fh server")
+                client_fhs.disconnect()
+                logger.debug("threaded: delete subscription handle fh server")
+                sub.unsubscribe(demo_handle)
+                sub.delete()
+                demo_handle = None
+                demo_handler = None
+            except Exception as e:
+                logger.debug("threaded: Catched Exception: " + str(e))
+
+        logger.debug("threaded: no connection to fh server - trying again in " + str(fh_counter) + " seconds.")
+        fh_counter = fh_counter * 2
+        if fh_counter > 17:
+            fh_counter = 1
+        time.sleep(fh_counter)
+
+
+
+
+###############  THREAD - CONNECT TO PANDA SERVER ###############
+# Panda Connection in separate thread
+def threaded_panda_connection():
+
+    # reconnection counter
+    panda_counter = 1
+
+    global global_panda_moving
+    global global_object_panda
+    temp = None
+
+    while True:
+        try:
+            logger.debug("threaded: connecting to panda server")
+            client_panda.connect()
+            logger.debug("threaded: successful connected to panda")
+
+            # Get root nodes
+            root_panda = client_panda.get_root_node()
+
+            ########## GET VARIABLES FROM SERVER ##########
+            # get our desired objects
+            global_object_panda = root_panda.get_child(["0:Objects", "2:PandaRobot"])
+
+            # VALUES
+            mover_panda_ros = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:MoveRobotRos"])
+            mover_panda_libfranka = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:MoveRobotLibfranka"])
+            panda_state = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotState"])
+            global_panda_moving = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotMoving"])
+
+            # everything went fine? then wait
+            while True:
+                temp = global_panda_moving.get_value()
+                time.sleep(5)
+                
+            try:
+                client_panda.disconnect()
+            except:
+                pass
+
+        except Exception as e:
+            try:
+                logger.debug("threaded: Catched Exception: " + str(e))
+                logger.debug("threaded: trying to disconnect from panda server")
+                client_panda.disconnect()
+            except:
+                pass
+
+        logger.debug("threaded: no connection to panda server - trying again in " + str(panda_counter) + " seconds.")
+        panda_counter = panda_counter * 2
+        if panda_counter > 17:
+            panda_counter = 1
+        time.sleep(panda_counter)
+
+
+
+###############  THREAD - CONNECT TO PIXTEND SERVER ###############
+# Pixtend Connection in separate thread
+def threaded_pixtend_connection():
+
+    # reconnection counter
+    pixtend_counter = 1
+
+    global global_belt_moving
+    global global_object_pixtend
+    global global_belt_moving
+
+    while True:
+        try:
+            logger.debug("threaded: connecting to pixtend server")
+            client_pixtend.connect()
+            logger.debug("threaded: successful connected to pixtend")
+
+            # Get root nodes
+            root_pixtend = client_pixtend.get_root_node()
+
+            ########## GET VARIABLES FROM SERVER ##########
+            # get our desired objects
+            global_object_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt"])
+
+            # VALUES
+            conbelt_state = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltState"])
+            conbelt_dist = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltDist"])
+            busy_light = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:SwitchBusyLight"])
+            global_belt_moving = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
+
+
+            # everything went fine? then wait
+            while True:
+                temp = global_belt_moving.get_value()
+                time.sleep(5)
+
+        except Exception as e:
+            logger.debug("threaded: Catched Exception: " + str(e))
+            try:
+                logger.debug("threaded: trying to disconnect from pixtend server")
+                client_pixtend.disconnect()
+            except:
+                pass
+
+        logger.debug("threaded: no connection to pixtend server - trying again in " + str(pixtend_counter) + " seconds.")
+        pixtend_counter = pixtend_counter * 2
+        if pixtend_counter > 17:
+            pixtend_counter = 1
+        time.sleep(pixtend_counter)
+
+
+
+##################### METHODS ######################
+
+def start_demo_core(movement, shelf):
+    logger.debug("in start demo core")
+    # global_object_panda.call_method("2:MoveRobotLibfranka", movement, str(global_desired_shelf.get_value()))
+    global_object_panda.call_method("2:MoveRobotRos", movement, str(shelf))
+
+    # wait for robot to even react otherwise the code would jump instantly to the end
+    while not global_panda_moving.get_value():
+        time.sleep(0.2)
+
+    while global_panda_moving.get_value():
+        time.sleep(0.2)
+
+    global_object_pixtend.call_method("2:MoveBelt", "left", 0.55)  # drive 55cm right
+
+    # wait for belt to even react otherwise the code would jump instantly to the end
+    while not global_belt_moving.get_value:
+        time.sleep(0.2)
+
+    while global_belt_moving.get_value():
+        time.sleep(0.2)
+
+    return True
+
+
+@uamethod
+def start_demo(parent, movement, shelf):
+    global storage
+    global global_demonstrator_busy
+    global global_panda_moving
+    global global_belt_moving
+
+    #if storage[shelf] is "0":  # can be activated - robot then only moves once per shelf number
+    if False:
+        return "Shelf empty - error!"
+
+    elif not global_panda_moving.get_value() and not global_belt_moving.get_value():
+
+        global_demonstrator_busy.set_value(True)
+        move_thread = threading.Thread(name='move_demo_thread', target=start_demo_core, args=(movement, shelf,))
+        move_thread.daemon = True
+        move_thread.start()
+        # storage[shelf] = "0"  # make shelf empty
+        return "Successful"
+
+    else:
+
+        return "Shelf not empty - Demonstrator started!"
 
 
 ################################################# START #######################################################
@@ -335,6 +532,12 @@ if __name__ == "__main__":
 
     # reconnection counter
     retry_counter = 1
+
+    # counter for server loop in order to get notifications if it is running 
+    notification_counter = 0
+
+    # keyboard interrupt raised by inner while loop giving signal also to outer while loop via variable
+    keyboardint = False
 
     ################ SERVER SETUP ################
 
@@ -363,7 +566,7 @@ if __name__ == "__main__":
     server.start()
     logger.debug("OPC-UA - Master - Server started at {}".format(url))
 
-    while True:
+    while not keyboardint:
         ###############   START SERVER   ###############
 
         try:
@@ -381,105 +584,25 @@ if __name__ == "__main__":
                 server.stop()
                 server.start()
 
-        logger.debug("retrying connection to panda, fh, pixtend, .. in " + str(retry_counter) + " seconds.")
-        time.sleep(retry_counter)
 
-        ###############  CONNECT TO PANDA SERVER ###############
-        try:
-            logger.debug("connecting to panda server")
-            client_panda.connect()
+        time.sleep(0.3)
+        #### CONNECT TO FH SERVER INSIDE A SEPARATE THREAD ####
+        fh_connection_thread = threading.Thread(name='threaded_fh_connection', target=threaded_fh_connection, args=(), )
+        fh_connection_thread.daemon = True
+        fh_connection_thread.start()
+        time.sleep(0.3)
 
-            # Get root nodes
-            root_panda = client_panda.get_root_node()
+        #### CONNECT TO PANDA SERVER INSIDE A SEPARATE THREAD ####
+        panda_connection_thread = threading.Thread(name='threaded_fh_connection', target=threaded_panda_connection, args=(), )
+        panda_connection_thread.daemon = True
+        panda_connection_thread.start()
+        time.sleep(0.3)
 
-            ########## GET VARIABLES FROM SERVER ##########
-            # get our desired objects
-            global_object_panda = root_panda.get_child(["0:Objects", "2:PandaRobot"])
+        #### CONNECT TO PIXTEND SERVER INSIDE A SEPARATE THREAD ####
+        pixtend_connection_thread = threading.Thread(name='threaded_fh_connection', target=threaded_pixtend_connection, args=(), )
+        pixtend_connection_thread.daemon = True
+        pixtend_connection_thread.start()
 
-            # VALUES
-            mover_panda_ros = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:MoveRobotRos"])
-            mover_panda_libfranka = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:MoveRobotLibfranka"])
-            panda_state = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotState"])
-            global_panda_moving = root_panda.get_child(["0:Objects", "2:PandaRobot", "2:RobotMoving"])
-
-
-        except Exception as e:
-            try:
-                logger.debug("Catched Exception: " + str(e))
-                logger.debug("trying to disconnect from panda server")
-                client_panda.disconnect()
-            except:
-                logger.debug("panda server was disconnected")
-                pass
-
-        ###############  CONNECT TO PIXTEND SERVER ###############
-        try:
-            logger.debug("connecting to pixtend server")
-            client_pixtend.connect()
-
-            # Get root nodes
-            root_pixtend = client_pixtend.get_root_node()
-
-            ########## GET VARIABLES FROM SERVER ##########
-            # get our desired objects
-            global_object_pixtend = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt"])
-
-            # VALUES
-            conbelt_state = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltState"])
-            conbelt_dist = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltDist"])
-            busy_light = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:SwitchBusyLight"])
-            global_belt_moving = root_pixtend.get_child(["0:Objects", "2:ConveyorBelt", "2:ConBeltMoving"])
-
-
-        except Exception as e:
-            logger.debug("Catched Exception: " + str(e))
-            try:
-                logger.debug("trying to disconnect from pixtend server")
-                client_pixtend.disconnect()
-            except:
-                logger.debug("pixtend server was disconnected")
-                pass
-
-        ###############  CONNECT TO FH SERVER ###############
-        try:
-            # connect to fhs server
-            logger.debug("connecting to fhs server")
-            client_fhs.connect()
-
-            # Get root nodes
-            root_fhs = client_fhs.get_root_node()
-
-            ########## GET VARIABLES FROM SERVER ##########
-            # get our desired objects
-            # object_fhs = root_fhs.get_child(["0:Objects", "2:PLC"])
-
-            # VALUES
-
-            # get the control values from fh salzburg server
-            global_desired_shelf = client_fhs.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")  # Original
-            # global_desired_shelf = client_fhs.get_node("ns=2;i=3")                                                     # Testing with pseudo FH server
-            local_shelf = global_desired_shelf.get_value() - 1  # Shelf 1-9 to array 0-8
-
-            global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:NewValAvailable")  # Original
-            # global_new_val_available = client_fhs.get_node("ns=2;i=4")                                                 #Testing with pseudo FH server
-            task_running = client_fhs.get_node("ns=6;s=::AsGlobalPV:TaskRunning")
-
-            ###### SUBSCRIBE TO SERVER DATA CHANGE ON FH SERVER #######
-            demo_handler = SubHandler(str(local_shelf + 1), global_panda_moving.get_value(),
-                                      global_belt_moving.get_value(), global_object_panda, global_object_pixtend)
-            sub = client_fhs.create_subscription(500, demo_handler)
-            demo_handle = sub.subscribe_data_change(global_new_val_available)
-            time.sleep(0.1)
-
-
-        except Exception as e:
-            logger.debug("Catched Exception: " + str(e))
-            try:
-                logger.debug("trying to disconnect from fh server")
-                client_fhs.disconnect()
-            except:
-                logger.debug("fh server was disconnected")
-                pass
 
         ###############  CHRIS' DATASTACK  ###############
         try:
@@ -496,58 +619,48 @@ if __name__ == "__main__":
         except requests.exceptions.ConnectionError:
             logger.debug("Catched Exception: requests - connection to data stack")
 
+
+
         ############### SERVER RUNNING ROUTINE #######################
-        try:
-            logger.debug("Going into server loop")
-            while True:
+        logger.debug("Going into server loop")
+        while True:
+
+            time.sleep(0.5)
+
+            try:
+                # Every x seconds a message that the server is still running - could be irritating in the log file otherwise
+                if notification_counter > 10:
+                    logger.debug("server running")
+                    notification_counter = 0
+                notification_counter = notification_counter + 1
+
                 # logger.debug("panda moving: " + str(global_panda_moving.get_value()) + ". belt_moving: " + str(global_belt_moving.get_value()))
                 # logger.debug("global_panda_moving: " + str(global_panda_moving.get_value()) + ". global_belt_moving: " + str(global_belt_moving.get_value()))
 
-                if global_panda_moving.get_value() or global_belt_moving.get_value():
-                    global_object_pixtend.call_method("2:SwitchBusyLight",
-                                                      True)  # switch the alarm light to red - means the demonstrator is working
+                if global_panda_moving.get_value() is True or global_belt_moving.get_value() is True:
+                    global_object_pixtend.call_method("2:SwitchBusyLight", True)  # switch the alarm light to red - means the demonstrator is working
                     global_demonstrator_busy.set_value(True)
                 else:
-                    global_object_pixtend.call_method("2:SwitchBusyLight",
-                                                      False)  # switch the alarm light to green - means the demonstrator is not working
+                    global_object_pixtend.call_method("2:SwitchBusyLight", False)  # switch the alarm light to green - means the demonstrator is not working
                     global_demonstrator_busy.set_value(False)
 
                 # logger.debug("global_demonstrator busy: " + str(global_demonstrator_busy.get_value()))
-                time.sleep(0.5)
 
-        except Exception as e:
-            logger.debug("Catched Exception: " + str(e))
 
-            try:
-                logger.debug("trying to disconnect from pixtend server")
-                client_pixtend.disconnect()
-            except:
-                logger.debug("pixtend server was disconnected")
-                pass
-            try:
-                logger.debug("trying to disconnect from panda server")
-                client_panda.disconnect()
-            except:
-                logger.debug("panda server was disconnected")
-                pass
-            try:
-                logger.debug("trying to disconnect from fhs server")
-                client_fhs.disconnect()
-            except:
-                logger.debug("fhs server was disconnected")
-                pass
-
-            retry_counter = retry_counter * 2
-
-            if retry_counter > 40:
-                retry_counter = 1
+            except Exception as e:
+                logger.debug("Catched Exception: " + str(e))
+                global_demonstrator_busy.set_value(True)
+                
+                logger.debug("it seems, that one of the clients is disconnected - waiting 5 seconds")
+                time.sleep(5)
 
 
 
-        except KeyboardInterrupt:
-            logger.debug("\nCTRL+C pressed")
-            server.stop()
-            logger.debug("\nClients disconnected and Server stopped")
-            break
+            except KeyboardInterrupt:
+                logger.debug("\nCTRL+C pressed")
+                server.stop()
+                logger.debug("\nClients disconnected and Server stopped")
+                keyboardint = True
+                break
 
-            # logger.debug(traceback.format_exc())#
+            # logger.debug(traceback.format_exc())
