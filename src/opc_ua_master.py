@@ -110,7 +110,6 @@ class SubHandler(object):
                 self.panda_moved = False
                 return False
 
-        logger.debug("out")
 
         logger.debug("panda moving: " + str(self.handler_panda_moving.get_value()))
         while self.handler_panda_moving.get_value():
@@ -179,7 +178,7 @@ class SubHandler(object):
             exit = "NewValAvailable is {}, demonstratorBusy is {}".format(val, demoBusy)
 
             if val is True and demoBusy is False:
-                logger.debug("global_demonstrator_busy: " + str(demoBusy) + ". NewValAvailable: " + str(
+                logger.debug("handler: global_demonstrator_busy: " + str(demoBusy) + ". NewValAvailable: " + str(
                     val) + ". ShelfNumber: " + str(handler_desired_shelf.get_value()) + ".")
 
                 ############# LOAD STORAGE DATA  #############
@@ -206,8 +205,6 @@ class SubHandler(object):
                     move_panda_thread.daemon = True
                     move_panda_thread.start()
                     move_panda_thread.join()
-
-                    # move_panda_thread.wait()
 
                     # logger.debug("p_moved %s", self.panda_moved)
                     if self.panda_moved is True:
@@ -246,7 +243,7 @@ class SubHandler(object):
             logger.debug("handler: Catched Exception: " + str(e))
             try:
                 logger.debug("handler: trying to disconnect from pixtend server")
-                handler_client_pixtend.disconnect() 
+                handler_client_pixtend.disconnect()
             except:
                 logger.debug("handler: pixtend server was disconnected")
                 pass
@@ -264,11 +261,11 @@ class SubHandler(object):
                 pass
             return "handler: Error: " + str(e)
 
-        logger.debug("exiting datachange_notification. return message: %s", exit)
+        logger.debug("handler: exiting datachange_notification. return message: %s", exit)
         return exit
 
     def event_notification(self, event):
-        logger.debug("Python: New event", event)
+        logger.debug("handler: New event", event)
 
 
 
@@ -288,13 +285,16 @@ def threaded_fh_connection():
     global global_new_val_available
     global subhandler_already_created
     temp = None
+    temp_node = None
     sub = None
+
 
     while True:
         try:
             # connect to fhs server
             logger.debug("threaded: connecting to fhs server")
             client_fhs.connect()
+            client_fhs_2.connect()
             logger.debug("threaded: successful connected to fhs")
 
             # Get root nodes
@@ -310,10 +310,13 @@ def threaded_fh_connection():
             # global_desired_shelf = client_fhs.get_node("ns=2;i=3")                                                     # Testing with pseudo FH server
             local_shelf = global_desired_shelf.get_value() - 1  # Shelf 1-9 to array 0-8
 
+            temp_node = client_fhs_2.get_node("ns=6;s=::AsGlobalPV:ShelfNumber")  # For the 2nd Client in the while loop - otherwise exeption when datachange subscription routine is active and get.value() in while loop is called
+
+
             global_new_val_available = client_fhs.get_node("ns=6;s=::AsGlobalPV:NewValAvailable")  # Original
             # global_new_val_available = client_fhs.get_node("ns=2;i=4")                                                 #Testing with pseudo FH server
             task_running = client_fhs.get_node("ns=6;s=::AsGlobalPV:TaskRunning")
-            
+
 
             ###### SUBSCRIBE TO SERVER DATA CHANGE ON FH SERVER #######
             demo_handler = SubHandler(str(local_shelf + 1), global_panda_moving.get_value(),
@@ -325,15 +328,16 @@ def threaded_fh_connection():
 
             # everything went fine? then wait
             while True:
-                temp = global_desired_shelf.get_value()
-                time.sleep(5)
-  
+                temp = temp_node.get_value() - 1  # Just to see if connection is still alive
+                time.sleep(1)
+
 
         except Exception as e:
             logger.debug("threaded: Catched Exception: " + str(e))
             try:
                 logger.debug("threaded: trying to disconnect from fh server")
                 client_fhs.disconnect()
+                client_fhs_2.disconnect()
                 logger.debug("threaded: delete subscription handle fh server")
                 sub.unsubscribe(demo_handle)
                 sub.delete()
@@ -384,8 +388,8 @@ def threaded_panda_connection():
             # everything went fine? then wait
             while True:
                 temp = global_panda_moving.get_value()
-                time.sleep(5)
-                
+                time.sleep(0.5)
+
             try:
                 client_panda.disconnect()
             except:
@@ -441,7 +445,7 @@ def threaded_pixtend_connection():
             # everything went fine? then wait
             while True:
                 temp = global_belt_moving.get_value()
-                time.sleep(5)
+                time.sleep(0.5)
 
         except Exception as e:
             logger.debug("threaded: Catched Exception: " + str(e))
@@ -518,7 +522,9 @@ if __name__ == "__main__":
 
     client_panda = Client(global_url_panda_server)
     client_pixtend = Client(global_url_pixtend_server)
-    client_fhs = Client(global_url_fhs_server)  # Original
+    client_fhs = Client(global_url_fhs_server)          # Original
+    client_fhs_2 = Client(global_url_fhs_server)       # for the while loop inside the fh connection thread - otherwise there is an exception when getting variables from the server when simultaniously a
+                                                        # datachange subscription routine is running
     # client_fhs = Client(global_url_pseudo_fhs_server)                                                                  # Testing with pseudo FH server
     # client = Client("opc.tcp://admin@localhost:4840/freeopcua/server/") #connect using a user
 
@@ -533,7 +539,7 @@ if __name__ == "__main__":
     # reconnection counter
     retry_counter = 1
 
-    # counter for server loop in order to get notifications if it is running 
+    # counter for server loop in order to get notifications if it is running
     notification_counter = 0
 
     # keyboard interrupt raised by inner while loop giving signal also to outer while loop via variable
@@ -630,7 +636,7 @@ if __name__ == "__main__":
             try:
                 # Every x seconds a message that the server is still running - could be irritating in the log file otherwise
                 if notification_counter > 10:
-                    logger.debug("server running")
+                    logger.debug("server: running")
                     notification_counter = 0
                 notification_counter = notification_counter + 1
 
@@ -648,10 +654,10 @@ if __name__ == "__main__":
 
 
             except Exception as e:
-                logger.debug("Catched Exception: " + str(e))
+                logger.debug("server: Catched Exception: " + str(e))
                 global_demonstrator_busy.set_value(True)
-                
-                logger.debug("it seems, that one of the clients is disconnected - waiting 5 seconds")
+
+                logger.debug("server: it seems, that one of the clients is disconnected - waiting 5 seconds")
                 time.sleep(5)
 
 
