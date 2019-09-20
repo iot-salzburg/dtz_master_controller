@@ -523,7 +523,7 @@ if __name__ == "__main__":
     client_panda = Client(global_url_panda_server)
     client_pixtend = Client(global_url_pixtend_server)
     client_fhs = Client(global_url_fhs_server)          # Original
-    client_fhs_2 = Client(global_url_fhs_server)       # for the while loop inside the fh connection thread - otherwise there is an exception when getting variables from the server when simultaniously a 
+    client_fhs_2 = Client(global_url_fhs_server)       # for the while loop inside the fh connection thread - otherwise there is an exception when getting variables from the server when simultaniously a
                                                         # datachange subscription routine is running
     # client_fhs = Client(global_url_pseudo_fhs_server)                                                                  # Testing with pseudo FH server
     # client = Client("opc.tcp://admin@localhost:4840/freeopcua/server/") #connect using a user
