@@ -10,7 +10,8 @@ services:
       - "4840:4840"
     deploy:
       placement:
-        constraints: [node.role == worker]
+        constraints: [node.hostname == il060]
+#        constraints: [node.role == worker]
       resources:
         limits:
           cpus: "1"
@@ -20,5 +21,5 @@ services:
         parallelism: 2
         delay: 10s
       restart_policy:
-        condition: on-failure
+        condition: any
 
